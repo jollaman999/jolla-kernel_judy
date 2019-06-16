@@ -32,9 +32,6 @@
 		<&tlmm 113 0>; // vpnl
 };
 
-&mdss_mdp {
-	connectors = <&sde_rscc &sde_wb>;
-};
 &soc {
 	gpio_keys {
 		pinctrl-0 = <&nfccover_gpio_default>;

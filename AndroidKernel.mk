@@ -131,10 +131,6 @@ ifeq ($(INIT_BOOTCHART2), true)
 KERNEL_CONFIG_OVERRIDE_FILES := bootchart2_defconfig
 endif
 
-ifneq ($(LDU_RMV_BUILD), true)
-KERNEL_CONFIG_OVERRIDE_FILES += judypn_lao_ldu_fake_size_defconfig
-endif
-
 $(KERNEL_OUT):
 	mkdir -p $(KERNEL_OUT)
 

@@ -9,7 +9,6 @@
 #include <soc/qcom/lge/board_lge.h>
 #endif
 
-extern int lgmd18_parse_dt(struct lgmd18 *lgmd18);
 extern int lgmd18_init(struct lgmd18 *lgmd18);
 
 #define LGMD18_ATTR_R_u32(_name)					\
@@ -94,14 +93,17 @@ static enum alarmtimer_restart lgmd18_timer_function(struct alarm *alarm,
 	return ALARMTIMER_NORESTART;
 }
 
-static void lgmd18_ov_work(struct work_struct *w)
+static void lgmd18_probe_md_work(struct work_struct *w)
 {
-	struct lgmd18 *lgmd18 = container_of(w, struct lgmd18, ov_work);
+	struct lgmd18 *lgmd18 = container_of(w, struct lgmd18, probe_md_work);
 	int val;
 	int val2;
 	union power_supply_propval propval = {0};
 	int rc;
 	int i;
+
+	if (lgmd18->probe_md(lgmd18) > 0)
+		goto moisture_detected;
 
 	for (i = 0; i < lgmd18->num_channels; i++) {
 		if (lgmd18->adc_chans[i].blue_thr_uv == UINT_MAX)
@@ -118,15 +120,38 @@ static void lgmd18_ov_work(struct work_struct *w)
 			continue;
 		}
 
-		if (val > lgmd18->adc_chans[i].blue_thr_uv) {
-			propval.intval = 1;
-			power_supply_set_property(lgmd18->usb_psy,
-				  POWER_SUPPLY_PROP_MOISTURE_DETECTED,
-				  &propval);
-			power_supply_changed(lgmd18->usb_psy);
+		switch (lgmd18->adc_chans[i].bias) {
+		case PIN_CONFIG_BIAS_PULL_UP:
+			if (val > lgmd18->adc_chans[i].blue_thr_uv) {
+				dev_info(lgmd18->dev, "The ADC value is greater than BLUE.\n");
+				goto moisture_detected;
+			}
+			break;
+		default:
 			break;
 		}
 	}
+
+	return;
+
+moisture_detected:
+	dev_info(lgmd18->dev, "Moisture detected in probe\n");
+
+	propval.intval = 1;
+	power_supply_set_property(lgmd18->usb_psy,
+				  POWER_SUPPLY_PROP_MOISTURE_DETECTED,
+				  &propval);
+	power_supply_changed(lgmd18->usb_psy);
+}
+
+static void lgmd18_shutdown(struct platform_device *pdev)
+{
+	struct lgmd18 *lgmd18 = platform_get_drvdata(pdev);
+
+	dev_dbg(&pdev->dev, "%s\n", __func__);
+
+	if (lgmd18->shutdown)
+		lgmd18->shutdown(lgmd18);
 }
 
 static int lgmd18_probe(struct platform_device *pdev)
@@ -152,7 +177,9 @@ static int lgmd18_probe(struct platform_device *pdev)
 
 	lgmd18 = iio_priv(indio_dev);
 	lgmd18->dev = &pdev->dev;
-	INIT_WORK(&lgmd18->ov_work, lgmd18_ov_work);
+	INIT_WORK(&lgmd18->probe_md_work, lgmd18_probe_md_work);
+
+	platform_set_drvdata(pdev, lgmd18);
 
 	lgmd18->usb_psy = power_supply_get_by_name("usb");
 	if (!lgmd18->usb_psy) {
@@ -302,7 +329,7 @@ static int lgmd18_probe(struct platform_device *pdev)
 			   lgmd18_timer_function);
 	}
 
-	queue_work(system_highpri_wq, &lgmd18->ov_work);
+	queue_work(system_highpri_wq, &lgmd18->probe_md_work);
 
 	return devm_iio_device_register(dev, indio_dev);
 }
@@ -319,5 +346,6 @@ static struct platform_driver lgmd18_driver = {
 		.of_match_table = lgmd18_match_table,
 	},
 	.probe = lgmd18_probe,
+	.shutdown = lgmd18_shutdown,
 };
 module_platform_driver(lgmd18_driver);

@@ -480,6 +480,16 @@ static int modem_ramdump(int enable, const struct subsys_desc *subsys)
 	return ret;
 }
 
+static void modem_intr_handler_helper(struct modem_data *drv)
+{
+	if (drv->subsys_desc.system_debug &&
+			!gpio_get_value(drv->subsys_desc.err_fatal_gpio))
+		panic("%s: System ramdump requested. Triggering device restart!\n",
+							__func__);
+	subsys_set_crash_status(drv->subsys, CRASH_STATUS_WDOG_BITE);
+	restart_modem(drv);
+}
+
 static irqreturn_t modem_wdog_bite_intr_handler(int irq, void *dev_id)
 {
 	struct modem_data *drv = subsys_to_drv(dev_id);
@@ -488,13 +498,8 @@ static irqreturn_t modem_wdog_bite_intr_handler(int irq, void *dev_id)
 		return IRQ_HANDLED;
 
 	pr_err("Watchdog bite received from modem software!\n");
-	if (drv->subsys_desc.system_debug &&
-			!gpio_get_value(drv->subsys_desc.err_fatal_gpio))
-		panic("%s: System ramdump requested. Triggering device restart!\n",
-							__func__);
-	subsys_set_crash_status(drv->subsys, CRASH_STATUS_WDOG_BITE);
-	restart_modem(drv);
 
+	modem_intr_handler_helper(drv);
 // LGE_ModemBSP_S, [LDB]
 #ifdef FEATURE_LGE_MODEM_DEBUG_INFO
     modem_debug.modem_ssr_level = subsys_get_restart_level(drv->subsys);
@@ -511,7 +516,7 @@ static irqreturn_t modem_wdog_bite_intr_handler(int irq, void *dev_id)
 static int pil_subsys_init(struct modem_data *drv,
 					struct platform_device *pdev)
 {
-	int ret;
+	int ret = -EINVAL;
 
 	drv->subsys_desc.name = "modem";
 	drv->subsys_desc.dev = &pdev->dev;
@@ -523,6 +528,13 @@ static int pil_subsys_init(struct modem_data *drv,
 	drv->subsys_desc.err_fatal_handler = modem_err_fatal_intr_handler;
 	drv->subsys_desc.stop_ack_handler = modem_stop_ack_intr_handler;
 	drv->subsys_desc.wdog_bite_handler = modem_wdog_bite_intr_handler;
+
+	if (IS_ERR_OR_NULL(drv->q6)) {
+		ret = PTR_ERR(drv->q6);
+		dev_err(&pdev->dev, "Pil q6 data is err %pK %d!!!\n",
+			drv->q6, ret);
+		goto err_subsys;
+	}
 
 	drv->q6->desc.modem_ssr = false;
 	drv->q6->desc.signal_aop = of_property_read_bool(pdev->dev.of_node,
@@ -595,6 +607,8 @@ static int pil_mss_loadable_init(struct modem_data *drv,
 
 	q6_desc->ops = &pil_msa_mss_ops;
 
+	q6->reset_clk = of_property_read_bool(pdev->dev.of_node,
+							"qcom,reset-clk");
 	q6->self_auth = of_property_read_bool(pdev->dev.of_node,
 							"qcom,pil-self-auth");
 	if (q6->self_auth) {

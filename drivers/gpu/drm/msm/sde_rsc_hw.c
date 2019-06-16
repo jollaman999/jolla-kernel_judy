@@ -419,9 +419,6 @@ static int sde_rsc_mode2_exit(struct sde_rsc_priv *rsc,
 	dss_reg_w(&rsc->drv_io, SDE_RSC_SOLVER_SOLVER_MODES_ENABLED_DRV0,
 						0x3, rsc->debug_mode);
 
-	dss_reg_w(&rsc->drv_io, SDE_RSC_SOLVER_SOLVER_MODES_ENABLED_DRV0,
-						0x3, rsc->debug_mode);
-
 	rsc_event_trigger(rsc, SDE_RSC_EVENT_POST_CORE_RESTORE);
 
 	return rc;
@@ -535,33 +532,6 @@ static int sde_rsc_mode2_entry(struct sde_rsc_priv *rsc)
 	if (rc) {
 		pr_err("vdd reg fast mode set failed rc:%d\n", rc);
 		return rc;
-	}
-
-	dss_reg_w(&rsc->drv_io, SDE_RSC_SOLVER_SOLVER_MODES_ENABLED_DRV0,
-						0x7, rsc->debug_mode);
-	rsc_event_trigger(rsc, SDE_RSC_EVENT_PRE_CORE_PC);
-
-	for (i = 0; i <= MAX_MODE2_ENTRY_TRY; i++) {
-		rc = sde_rsc_mode2_entry_trigger(rsc);
-		if (!rc)
-			break;
-
-		pr_err("try:%d mdss gdsc power down failed rc:%d\n", i, rc);
-		SDE_EVT32(rc, i, SDE_EVTLOG_ERROR);
-
-		/* avoid touching f1 qtimer for last try */
-		if (i != MAX_MODE2_ENTRY_TRY)
-			sde_rsc_reset_mode_0_1(rsc);
-	}
-
-	if (rc) {
-		SDE_DBG_DUMP(SDE_RSC_DRV_DBG_NAME,
-		SDE_RSC_WRAPPER_DBG_NAME,
-		SDE_PDC_DBG_NAME,
-		SDE_PDC_SEQ_DBG_NAME,
-		DISP_CC_DBG_NAME,
-		"panic");
-		goto end;
 	}
 
 	dss_reg_w(&rsc->drv_io, SDE_RSC_SOLVER_SOLVER_MODES_ENABLED_DRV0,

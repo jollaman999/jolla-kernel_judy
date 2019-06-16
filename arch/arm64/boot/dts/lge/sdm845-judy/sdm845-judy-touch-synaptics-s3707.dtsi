@@ -45,7 +45,7 @@
 		/* Firmware */
 		use_fw_upgrade = <1>;
 		use_fw_recovery = <1>;
-		fw_image = "touch/judypn/PLG661-V1.02-PR2822436-s3707b_BLV86_DS5.10.81.1_50064182.img";
+		fw_image = "touch/judypn/PLG661-V1.03-PR2824408-s3707b_BLV86_DS5.10.81.1_50064183.img";
 		panel_spec = "touch/judypn/judypn_limit.txt";
 		panel_spec_mfts_folder = "touch/judypn/judypn_limit_mfts.txt";
 

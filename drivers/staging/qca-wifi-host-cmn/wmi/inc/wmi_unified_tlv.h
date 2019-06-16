@@ -1,8 +1,5 @@
 /*
- * Copyright (c) 2016-2017 The Linux Foundation. All rights reserved.
- *
- * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
- *
+ * Copyright (c) 2016-2018 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -19,11 +16,6 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/*
- * This file was originally distributed by Qualcomm Atheros, Inc.
- * under proprietary terms before Copyright ownership was assigned
- * to the Linux Foundation.
- */
 #ifndef _WMI_UNIFIED_TLV_H_
 #define _WMI_UNIFIED_TLV_H_
 #include <osdep.h>
@@ -400,6 +392,16 @@ QDF_STATUS send_wow_sta_ra_filter_cmd_tlv(wmi_unified_t wmi_handle,
 
 QDF_STATUS send_nat_keepalive_en_cmd_tlv(wmi_unified_t wmi_handle, uint8_t vdev_id);
 
+/**
+ * send_wlm_latency_level_cmd_tlv() - confige WLM parameters
+ * @wmi_handle: wmi handle
+ * @params: wlm parameters
+ *
+ * Return: QDF_STATUS_SUCCESS for success or error code
+ */
+QDF_STATUS send_wlm_latency_level_cmd_tlv(wmi_unified_t wmi_handle,
+					struct wlm_latency_level_param *param);
+
 QDF_STATUS send_csa_offload_enable_cmd_tlv(wmi_unified_t wmi_handle,
 			uint8_t vdev_id);
 
@@ -567,13 +569,12 @@ QDF_STATUS send_enable_arp_ns_offload_cmd_tlv(wmi_unified_t wmi_handle,
 /**
  * send_conf_hw_filter_cmd_tlv() - configure hw filter mode to firmware
  * @wmi: wmi handle
- * @vdev_id: Id of the vdev to configure
- * @mode_bitmap: the hw filter mode to configure
+ * @req: the hw filter mode request parameters
  *
  * Return: QDF_STATUS
  */
-QDF_STATUS send_conf_hw_filter_cmd_tlv(wmi_unified_t wmi, uint8_t vdev_id,
-				       uint8_t mode_bitmap);
+QDF_STATUS send_conf_hw_filter_cmd_tlv(wmi_unified_t wmi,
+				       struct wmi_hw_filter_req_params *req);
 
 QDF_STATUS send_set_led_flashing_cmd_tlv(wmi_unified_t wmi_handle,
 				struct flashing_req_params *flashing);
@@ -630,22 +631,6 @@ QDF_STATUS send_per_roam_config_cmd_tlv(wmi_unified_t wmi_handle,
 QDF_STATUS send_get_buf_extscan_hotlist_cmd_tlv(wmi_unified_t wmi_handle,
 				   struct ext_scan_setbssi_hotlist_params *
 				   photlist, int *buf_len);
-
-/**
- * send_set_active_bpf_mode_cmd_tlv() - configure active BPF mode in FW
- * @wmi_handle: the WMI handle
- * @vdev_id: the Id of the vdev to apply the configuration to
- * @ucast_mode: the active BPF mode to configure for unicast packets
- * @mcast_bcast_mode: the active BPF mode to configure for multicast/broadcast
- *	packets
- *
- * Return: QDF status
- */
-QDF_STATUS
-send_set_active_bpf_mode_cmd_tlv(wmi_unified_t wmi_handle,
-				 uint8_t vdev_id,
-				 FW_ACTIVE_BPF_MODE ucast_mode,
-				 FW_ACTIVE_BPF_MODE mcast_bcast_mode);
 
 QDF_STATUS send_set_arp_stats_req_cmd_tlv(wmi_unified_t wmi_handle,
 					  struct set_arp_stats *req_buf);

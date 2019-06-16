@@ -92,6 +92,17 @@ extern int lge_get_bootreason(void);
 bool lge_check_recoveryboot(void);
 #endif
 
+enum lge_hydra_name lge_get_hydra_name(void);
+enum lge_hydra_name {
+	HYDRA_ALPHA,
+	HYDRA_PRIME,
+	HYDRA_PLUS,
+	HYDRA_PLUS1,
+	HYDRA_PLUS2,
+	HYDRA_SIGNATURE,
+	HYDRA_NONE
+};
+
 #ifdef CONFIG_LGE_ONE_BINARY_SKU
 /*
  * this SKU, SUB revision, VARI main and VARI sub should be sync with
@@ -155,14 +166,6 @@ enum lge_laop_operator_type {
   OP_MAX
 };
 
-enum hw_hydra_type {
-  HW_HYDRA_ALPHA,
-  HW_HYDRA_PRIME,
-  HW_HYDRA_PLUS,
-  HW_HYDRA_MAX
-};
-char *lge_get_board_hydra(void);
-enum hw_hydra_type lge_get_board_hydra_type(void);
 enum lge_laop_operator_type lge_get_laop_operator(void);
 #endif
 

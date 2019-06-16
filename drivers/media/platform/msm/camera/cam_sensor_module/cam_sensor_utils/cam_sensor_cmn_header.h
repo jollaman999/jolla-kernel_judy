@@ -175,7 +175,7 @@ enum cam_eeprom_packet_opcodes {
 enum cam_ois_packet_opcodes {
 	CAM_OIS_PACKET_OPCODE_INIT,
 	CAM_OIS_PACKET_OPCODE_OIS_CONTROL,
-	CAM_OIS_PACKET_OPCODE_OIS_USERDATA
+	CAM_OIS_PACKET_OPCODE_OIS_USERDATA /* LGE_CHANGE, 2018-09-11, OIS,AF Driver update for LG EIS, yonghwan.lym@lge.com */
 };
 
 enum msm_bus_perf_setting {
@@ -320,7 +320,9 @@ enum msm_sensor_camera_id_t {
 	CAMERA_1,
 	CAMERA_2,
 	CAMERA_3,
-    CAMERA_4,/* LGE_CHANGE, Increase max_cameras for storm, 2018-06-04, dongsu.bag@lge.com */
+	CAMERA_4,
+	CAMERA_5,
+	CAMERA_6,
 	MAX_CAMERAS,
 };
 
@@ -383,10 +385,11 @@ struct msm_camera_gpio_conf {
 	struct msm_camera_gpio_num_info *gpio_num_info;
 };
 
+/* LGE_CHANGE_S, 2018-09-11, OIS,AF Driver update for LG EIS, yonghwan.lym@lge.com */
 #define MSM_OIS_DATA_BUFFER_SIZE 15
 struct msm_ois_readout {
-    int16_t ois_x_shift;
-    int16_t ois_y_shift;
+    int32_t ois_x_shift;
+    int32_t ois_y_shift;
     int64_t x_readout_time;
     int64_t y_readout_time;
 };
@@ -408,4 +411,5 @@ struct msm_act_readout_buffer {
     int32_t buffer_head;
     int32_t buffer_tail;
 };
+/* LGE_CHANGE_E, 2018-09-11, OIS,AF Driver update for LG EIS, yonghwan.lym@lge.com */
 #endif /* _CAM_SENSOR_CMN_HEADER_ */

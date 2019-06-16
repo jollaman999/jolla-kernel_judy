@@ -37,13 +37,13 @@
 #ifdef CONFIG_LGE_HANDLE_PANIC
 #include <soc/qcom/lge/lge_handle_panic.h>
 #endif
-#ifdef CONFIG_LGE_TOUCH_HALLIC_COVER
-#include <soc/qcom/lge/board_lge.h>
-#endif
 
 #define CONFIG_LGE_SUPPORT_HALLIC
 
 #ifdef CONFIG_LGE_SUPPORT_HALLIC
+
+#include <soc/qcom/lge/board_lge.h>
+
 struct hallic_dev sdev = {
 	.name = "smartcover",
 	.state = 0,
@@ -53,6 +53,18 @@ struct hallic_dev ndev = {
 	.name = "nfccover",
 	.state = 0,
 };
+
+static bool hallic_check_hydra_name(void)
+{
+	int hydra_name = lge_get_hydra_name();
+	pr_info ("%s hydra_name = %d\n", __func__, hydra_name);
+
+	if (hydra_name == HYDRA_SIGNATURE)
+		return true;
+	else
+		return false;
+}
+
 #endif
 
 struct gpio_button_data {
@@ -771,6 +783,17 @@ gpio_keys_get_devtree_pdata(struct device *dev)
 		if (of_property_read_u32(pp, "debounce-interval",
 					 &button->debounce_interval))
 			button->debounce_interval = 5;
+
+#ifdef CONFIG_LGE_SUPPORT_HALLIC
+		if (button->desc != NULL) {
+		    if (hallic_check_hydra_name()) {
+			    if (!strncmp(button->desc, "nfc_cover", 9)) {
+				    button->desc = "smart_cover";
+				    button->debounce_interval = 15;
+			    }
+		    }
+		}
+#endif
 	}
 
 	if (pdata->nbuttons == 0)

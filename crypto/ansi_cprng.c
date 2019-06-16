@@ -14,9 +14,6 @@
  */
 
 #include <crypto/internal/rng.h>
-#ifdef CONFIG_CRYPTO_CCMODE
-#include <linux/cc_mode.h>
-#endif
 #include <linux/err.h>
 #include <linux/init.h>
 #include <linux/module.h>
@@ -462,25 +459,11 @@ static struct rng_alg rng_algs[] = { {
 /* Module initalization */
 static int __init prng_mod_init(void)
 {
-#ifdef CONFIG_CRYPTO_CCMODE
-/* On ccmode, ansi_cprng shouldn't be registered */
-	if (cc_mode) {
-		printk(KERN_INFO
-			"cc_mode(%d) blocks registering cprng \n",
-			cc_mode);
-		return 0;
-	}
-#endif
-
 	return crypto_register_rngs(rng_algs, ARRAY_SIZE(rng_algs));
 }
 
 static void __exit prng_mod_fini(void)
 {
-#ifdef CONFIG_CRYPTO_CCMODE
-	if (cc_mode)
-		return;
-#endif
 	crypto_unregister_rngs(rng_algs, ARRAY_SIZE(rng_algs));
 }
 

@@ -50,7 +50,10 @@ struct lgmd18 {
 	void				*private_data;
 
 	struct power_supply		*usb_psy;
-	struct work_struct		ov_work;
+	struct work_struct		probe_md_work;
+
+	int (*probe_md)(struct lgmd18 *);
+	void (*shutdown)(struct lgmd18 *);
 
 	/* iio */
 	const struct iio_info		*info;

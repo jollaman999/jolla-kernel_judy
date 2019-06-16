@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016-2017, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2016-2018, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -270,8 +270,6 @@ enum dsi_cmd_set_type {
 	DSI_CMD_SET_POST_TIMING_SWITCH,
 	DSI_CMD_SET_LOW_PERSIST_MODE_OFF,
 	DSI_CMD_SET_LOW_PERSIST_MODE_ON,
-	DSI_CMD_READ_POWER_MODE,
-	DSI_CMD_READ_TE_SIGNAL_MODE,
 #if IS_ENABLED(CONFIG_LGE_DISPLAY_COMMON)
 	DSI_CMD_SET_ON_WITH_APO,
 #endif
@@ -331,7 +329,6 @@ enum dsi_video_traffic_mode {
 struct dsi_cmd_desc {
 	struct mipi_dsi_msg msg;
 	bool last_command;
-//	bool read_command;
 	u32  post_wait_ms;
 };
 
@@ -414,6 +411,7 @@ struct dsi_mode_info {
  * @ignore_rx_eot:       Ignore Rx EOT packets if set to true.
  * @append_tx_eot:       Append EOT packets for forward transmissions if set to
  *                       true.
+ * @force_hs_clk_lane:   Send continuous clock to the panel.
  */
 struct dsi_host_common_cfg {
 	enum dsi_pixel_format dst_format;
@@ -432,6 +430,7 @@ struct dsi_host_common_cfg {
 	u32 t_clk_pre;
 	bool ignore_rx_eot;
 	bool append_tx_eot;
+	bool force_hs_clk_lane;
 };
 
 /**
@@ -448,6 +447,8 @@ struct dsi_host_common_cfg {
  * @bllp_lp11_en:              Enter low power stop mode (LP-11) during BLLP.
  * @traffic_mode:              Traffic mode for video stream.
  * @vc_id:                     Virtual channel identifier.
+ * @dma_sched_line:         Line number, after vactive end, at which command dma
+ *			       needs to be triggered.
  */
 struct dsi_video_engine_cfg {
 	bool last_line_interleave_en;
@@ -459,6 +460,7 @@ struct dsi_video_engine_cfg {
 	bool bllp_lp11_en;
 	enum dsi_video_traffic_mode traffic_mode;
 	u32 vc_id;
+	u32 dma_sched_line;
 };
 
 /**
@@ -605,6 +607,7 @@ enum dsi_error_status {
 	DSI_FIFO_OVERFLOW = 1,
 	DSI_FIFO_UNDERFLOW,
 	DSI_LP_Rx_TIMEOUT,
+	DSI_ERR_INTR_ALL,
 };
 
 #endif /* _DSI_DEFS_H_ */

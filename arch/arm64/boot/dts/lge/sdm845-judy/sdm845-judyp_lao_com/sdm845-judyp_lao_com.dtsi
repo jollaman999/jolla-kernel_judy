@@ -32,4 +32,5 @@
 #include "sdm845-judyp_lao_com-fingerprint.dtsi"
 #include "sdm845-judyp_lao_com-usb.dtsi"
 #include "sdm845-judyp_lao_com-storage.dtsi"
+#include "sdm845-judyp_lao_com-pkm.dtsi"
 

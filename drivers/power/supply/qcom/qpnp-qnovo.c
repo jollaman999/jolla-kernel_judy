@@ -128,6 +128,8 @@
 #define DC_READY_VOTER		"DC_READY_VOTER"
 
 #define PT_RESTART_VOTER	"PT_RESTART_VOTER"
+#define REG_WRITE_VOTER		"REG_WRITE_VOTER"
+
 #ifdef CONFIG_LGE_PM
 #define REG_WRITE_VOTER		"REG_WRITE_VOTER"
 #endif
@@ -149,9 +151,7 @@ struct qnovo {
 	struct votable		*not_ok_to_qnovo_votable;
 	struct votable		*chg_ready_votable;
 	struct votable		*awake_votable;
-#ifdef CONFIG_LGE_PM
 	struct votable		*auto_esr_votable;
-#endif
 	struct class		qnovo_class;
 	struct pmic_revid_data	*pmic_rev_id;
 	u32			wa_flags;
@@ -354,19 +354,8 @@ static int qnovo_disable_cb(struct votable *votable, void *data, int disable,
 		pr_err("Couldn't set prop qnovo_enable rc = %d\n", rc);
 		return -EINVAL;
 	}
-#ifdef CONFIG_LGE_PM
-	vote(chip->auto_esr_votable, QNOVO_OVERALL_VOTER, disable, 0);
-#else
-	/*
-	 * fg must be available for enable FG_AVAILABLE_VOTER
-	 * won't enable it otherwise
-	 */
 
-	if (is_fg_available(chip))
-		power_supply_set_property(chip->bms_psy,
-				POWER_SUPPLY_PROP_CHARGE_QNOVO_ENABLE,
-				&pval);
-#endif
+	vote(chip->auto_esr_votable, QNOVO_OVERALL_VOTER, disable, 0);
 
 	vote(chip->pt_dis_votable, QNOVO_OVERALL_VOTER, disable, 0);
 	rc = qnovo_batt_psy_update(chip, disable);
@@ -539,9 +528,7 @@ struct param_info {
 	int	reg_to_unit_offset;
 	int	min_val;
 	int	max_val;
-#ifdef CONFIG_LGE_PM
 	void	(*callback)(struct qnovo *chip, u8 *val);
-#endif
 	char	*units_str;
 };
 
@@ -568,9 +555,7 @@ static struct param_info params[] = {
 		.name			= "PE_CTRL2_REG",
 		.start_addr		= QNOVO_PE_CTRL2,
 		.num_regs		= 1,
-#ifdef CONFIG_LGE_PM
 		.callback		= pe_ctrl2_write_cb,
-#endif
 		.units_str		= "",
 	},
 	[PTRAIN_STS_REG] = {
@@ -965,10 +950,8 @@ static ssize_t reg_store(struct class *c, struct class_attribute *attr,
 	set_qnovo_config(chip, i, val, true);
 #endif
 
-#ifdef CONFIG_LGE_PM
 	if (params[i].callback)
 		params[i].callback(chip, buf);
-#endif
 
 	return count;
 }
@@ -1598,9 +1581,7 @@ static int qnovo_hw_init(struct qnovo *chip)
 	vote(chip->pt_dis_votable, QNOVO_OVERALL_VOTER, true, 0);
 	vote(chip->pt_dis_votable, ESR_VOTER, false, 0);
 
-#ifdef CONFIG_LGE_PM
 	vote(chip->auto_esr_votable, QNOVO_OVERALL_VOTER, true, 0);
-#endif
 
 	val = 0;
 	rc = qnovo_write(chip, QNOVO_STRM_CTRL, &val, 1);
@@ -1876,10 +1857,8 @@ static int qnovo_probe(struct platform_device *pdev)
 
 unreg_notifier:
 	power_supply_unreg_notifier(&chip->nb);
-#ifdef CONFIG_LGE_PM
 destroy_auto_esr_votable:
 	destroy_votable(chip->auto_esr_votable);
-#endif
 destroy_awake_votable:
 	destroy_votable(chip->awake_votable);
 destroy_chg_ready_votable:

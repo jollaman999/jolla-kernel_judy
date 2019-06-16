@@ -482,10 +482,10 @@ static void frequency_process(struct work_struct *work)
 	int dst_cpu = -1, cl = -1;
 	int opt_freq = 0;
 
-	mutex_lock(&(platform_data->target_governor_lock));
-
 	if (!platform_data)
 		goto exit;
+
+	mutex_lock(&(platform_data->target_governor_lock));
 
 	if (!(platform_data->target_governor_state)) {
 		pr_debug(PRM_TAG "target governor is not operating state(%s)\n",
@@ -539,7 +539,9 @@ exit_cpu:
 
 exit:
 	stop_kpolicy();
-	mutex_unlock(&(platform_data->target_governor_lock));
+
+	if (platform_data)
+		mutex_unlock(&(platform_data->target_governor_lock));
 	return;
 }
 
@@ -619,6 +621,9 @@ static int update_sys_frequency
 				argp,
 				sizeof(struct sys_cmd_freq_req));
 	if (ret)
+		return -ENOTTY;
+
+	if ((freq.req_cluster < 0) || (freq.req_cluster >= NUM_CLUSTER))
 		return -ENOTTY;
 
 	ret = copy_to_user((void __user*)arg,
@@ -895,10 +900,10 @@ ssize_t lge_triton_cur_policy_store(struct device *dev,
 		struct device_attribute *attr, const char *buf,
 		size_t count)
 {
-	unsigned int input;
+	int input;
 	int ret;
 
-	ret = sscanf(buf, "%u", &input);
+	ret = sscanf(buf, "%d", &input);
 	if (ret != 1)
 		return -EINVAL;
 
@@ -912,10 +917,10 @@ ssize_t lge_triton_aevents_store(struct device *dev,
 		struct device_attribute *attr, const char *buf,
 		size_t count)
 {
-	unsigned int input;
+	int input;
 	int ret;
 
-	ret = sscanf(buf, "%u", &input);
+	ret = sscanf(buf, "%d", &input);
 	if (ret != 1)
 		return -EINVAL;
 
@@ -926,10 +931,10 @@ ssize_t lge_triton_bevents_store(struct device *dev,
 		struct device_attribute *attr, const char *buf,
 		size_t count)
 {
-	unsigned int input;
+	int input;
 	int ret;
 
-	ret = sscanf(buf, "%u", &input);
+	ret = sscanf(buf, "%d", &input);
 	if (ret != 1)
 		return -EINVAL;
 
@@ -940,10 +945,10 @@ ssize_t lge_triton_enable_store(struct device *dev,
 		struct device_attribute *attr, const char *buf,
 		size_t count)
 {
-	unsigned int input;
+	int input;
 	int ret;
 
-	ret = sscanf(buf, "%u", &input);
+	ret = sscanf(buf, "%d", &input);
 	if (ret != 1)
 		return -EINVAL;
 
@@ -957,10 +962,10 @@ ssize_t lge_triton_enforce_store(struct device *dev,
 		struct device_attribute *attr, const char *buf,
 		size_t count)
 {
-	unsigned int input;
+	int input;
 	int ret;
 
-	ret = sscanf(buf, "%u", &input);
+	ret = sscanf(buf, "%d", &input);
 	if (ret != 1)
 		return -EINVAL;
 
@@ -974,10 +979,10 @@ ssize_t lge_triton_debug_store(struct device *dev,
 		struct device_attribute *attr, const char *buf,
 		size_t count)
 {
-	unsigned int input;
+	int input;
 	int ret;
 
-	ret = sscanf(buf, "%u", &input);
+	ret = sscanf(buf, "%d", &input);
 	if (ret != 1)
 		return -EINVAL;
 

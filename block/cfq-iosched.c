@@ -2256,10 +2256,16 @@ static struct cfq_queue *cfq_choose_wl_type_best_rb_key(struct cfq_data *cfqd,
 	bool key_valid = false;
 	u64 lowest_key = 0;
 	struct cfq_queue *cur_cfqq = cfqq;
+	struct cfq_rb_root *tmp_root = NULL;
 
 	for (i = 0; i <= SYNC_WORKLOAD; ++i) {
 		/* select the one with lowest rb_key */
-		queue = cfq_rb_first(st_for(cfqg, wl_class, i));
+		tmp_root = st_for(cfqg, wl_class, i);
+		if (tmp_root)
+			queue = cfq_rb_first(tmp_root);
+		else
+			queue = NULL;
+
 		if (queue &&
 		    (!key_valid || queue->rb_key < lowest_key)) {
 			lowest_key = queue->rb_key;

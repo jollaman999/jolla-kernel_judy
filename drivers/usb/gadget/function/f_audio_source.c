@@ -338,14 +338,15 @@ static struct device_attribute *audio_source_function_attributes[] = {
 
 /*--------------------------------------------------------------------------*/
 
-static struct usb_request *audio_request_new(struct usb_ep *ep, int buffer_size)
+static struct usb_request *audio_request_new(struct usb_ep *ep, int buffer_size,
+					size_t extra_buf_alloc)
 {
 	struct usb_request *req = usb_ep_alloc_request(ep, GFP_KERNEL);
 
 	if (!req)
 		return NULL;
 
-	req->buf = kmalloc(buffer_size, GFP_KERNEL);
+	req->buf = kmalloc(buffer_size + extra_buf_alloc, GFP_KERNEL);
 	if (!req->buf) {
 		usb_ep_free_request(ep, req);
 		return NULL;
@@ -397,7 +398,6 @@ static void audio_send(struct audio_dev *audio)
 	s64 msecs;
 	s64 frames;
 	ktime_t now;
-#ifdef CONFIG_LGE_USB_GADGET
 	unsigned long flags;
 
 	spin_lock_irqsave(&audio->lock, flags);
@@ -414,16 +414,6 @@ static void audio_send(struct audio_dev *audio)
 
 	runtime = audio->substream->runtime;
 	spin_unlock_irqrestore(&audio->lock, flags);
-#else
-	/* audio->substream will be null if we have been closed */
-	if (!audio->substream)
-		return;
-	/* audio->buffer_pos will be null if we have been stopped */
-	if (!audio->buffer_pos)
-		return;
-
-	runtime = audio->substream->runtime;
-#endif
 
 	/* compute number of frames to send */
 	now = ktime_get();
@@ -446,12 +436,7 @@ static void audio_send(struct audio_dev *audio)
 
 	while (frames > 0) {
 		req = audio_req_get(audio);
-#ifdef CONFIG_LGE_USB_GADGET
 		spin_lock_irqsave(&audio->lock, flags);
-		if (!req) {
-			spin_unlock_irqrestore(&audio->lock, flags);
-			break;
-		}
 		/* audio->substream will be null if we have been closed */
 		if (!audio->substream) {
 			spin_unlock_irqrestore(&audio->lock, flags);
@@ -460,14 +445,12 @@ static void audio_send(struct audio_dev *audio)
 		/* audio->buffer_pos will be null if we have been stopped */
 		if (!audio->buffer_pos) {
 			spin_unlock_irqrestore(&audio->lock, flags);
-			pr_debug("%s: audio->buffer_pos is NULL, return!\n", __func__);
-			audio_req_put(audio, req);
 			return;
 		}
-#else
-		if (!req)
+		if (!req) {
+			spin_unlock_irqrestore(&audio->lock, flags);
 			break;
-#endif
+		}
 
 		length = frames_to_bytes(runtime, frames);
 		if (length > IN_EP_MAX_PACKET_SIZE)
@@ -493,9 +476,7 @@ static void audio_send(struct audio_dev *audio)
 		}
 
 		req->length = length;
-#ifdef CONFIG_LGE_USB_GADGET
 		spin_unlock_irqrestore(&audio->lock, flags);
-#endif
 		ret = usb_ep_queue(audio->in_ep, req, GFP_ATOMIC);
 		if (ret < 0) {
 			pr_err("usb_ep_queue failed ret: %d\n", ret);
@@ -769,7 +750,8 @@ audio_bind(struct usb_configuration *c, struct usb_function *f)
 	f->ss_descriptors = ss_audio_desc;
 
 	for (i = 0, status = 0; i < IN_EP_REQ_COUNT && status == 0; i++) {
-		req = audio_request_new(ep, IN_EP_MAX_PACKET_SIZE);
+		req = audio_request_new(ep, IN_EP_MAX_PACKET_SIZE,
+						cdev->gadget->extra_buf_alloc);
 		if (req) {
 			req->context = audio;
 			req->complete = audio_data_complete;

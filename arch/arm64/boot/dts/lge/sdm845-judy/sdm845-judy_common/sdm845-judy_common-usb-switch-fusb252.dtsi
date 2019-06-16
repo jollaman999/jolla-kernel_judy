@@ -16,7 +16,7 @@
 
 		lge,oe-gpio = <&tlmm 21 0>;
 		lge,sel-gpio = <&tlmm 99 0>;
-		lge,ccov-gpio = <&tlmm 79 0>;
+		lge,ovp-gpio = <&tlmm 79 0>;
 
 		pinctrl-names = "default";
 		pinctrl-0 = <&fusb252_oe_active &fusb252_sel_active &fusb252_ccov_active>;

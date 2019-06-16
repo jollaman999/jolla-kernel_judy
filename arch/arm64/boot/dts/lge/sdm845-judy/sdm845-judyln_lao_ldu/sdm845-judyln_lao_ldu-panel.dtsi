@@ -1215,7 +1215,3 @@
 		};
 	};
 };
-
-&mdss_mdp {
-       connectors = <&sde_rscc &sde_wb>;
-};

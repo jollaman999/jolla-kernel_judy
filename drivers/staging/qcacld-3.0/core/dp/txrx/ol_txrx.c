@@ -1,9 +1,6 @@
 /*
  * Copyright (c) 2011-2018 The Linux Foundation. All rights reserved.
  *
- * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
- *
- *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
  * above copyright notice and this permission notice appear in all
@@ -19,12 +16,6 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/*
- * This file was originally distributed by Qualcomm Atheros, Inc.
- * under proprietary terms before Copyright ownership was assigned
- * to the Linux Foundation.
- */
-
 /*=== includes ===*/
 /* header files for OS primitives */
 #include <osdep.h>              /* uint32_t, etc. */
@@ -32,6 +23,7 @@
 #include <qdf_types.h>          /* qdf_device_t, qdf_print */
 #include <qdf_lock.h>           /* qdf_spinlock */
 #include <qdf_atomic.h>         /* qdf_atomic_read */
+#include <qdf_debugfs.h>
 
 #if defined(HIF_PCI) || defined(HIF_SNOC) || defined(HIF_AHB)
 /* Required for WLAN_FEATURE_FASTPATH */
@@ -93,6 +85,25 @@
 
 /* thresh for peer's cached buf queue beyond which the elements are dropped */
 #define OL_TXRX_CACHED_BUFQ_THRESH 128
+
+#define DPT_DEBUGFS_PERMS	(QDF_FILE_USR_READ |	\
+				QDF_FILE_USR_WRITE |	\
+				QDF_FILE_GRP_READ |	\
+				QDF_FILE_OTH_READ)
+
+#define DPT_DEBUGFS_NUMBER_BASE	10
+/**
+ * enum dpt_set_param_debugfs - dpt set params
+ * @DPT_SET_PARAM_PROTO_BITMAP : set proto bitmap
+ * @DPT_SET_PARAM_NR_RECORDS: set num of records
+ * @DPT_SET_PARAM_VERBOSITY: set verbosity
+ */
+enum dpt_set_param_debugfs {
+	DPT_SET_PARAM_PROTO_BITMAP = 1,
+	DPT_SET_PARAM_NR_RECORDS = 2,
+	DPT_SET_PARAM_VERBOSITY = 3,
+	DPT_SET_PARAM_MAX,
+};
 
 /* These macros are expected to be used only for data path.
  * Existing APIs cannot be used since they log every time
@@ -1180,7 +1191,21 @@ static void ol_txrx_stats_display_tso(ol_txrx_pdev_handle pdev)
 		}
 	}
 }
+
+static void ol_txrx_tso_stats_clear(ol_txrx_pdev_handle pdev)
+{
+	qdf_mem_zero(&pdev->stats.pub.tx.tso.tso_pkts,
+		     sizeof(struct ol_txrx_stats_elem));
+#if defined(FEATURE_TSO)
+	qdf_mem_zero(&pdev->stats.pub.tx.tso.tso_info,
+		     sizeof(struct ol_txrx_stats_tso_info));
+	qdf_mem_zero(&pdev->stats.pub.tx.tso.tso_hist,
+		     sizeof(struct ol_txrx_tso_histogram));
+#endif
+}
+
 #else
+
 static void ol_txrx_stats_display_tso(ol_txrx_pdev_handle pdev)
 {
 	QDF_TRACE(QDF_MODULE_ID_TXRX, QDF_TRACE_LEVEL_ERROR,
@@ -1203,7 +1228,203 @@ static void ol_txrx_tso_stats_deinit(ol_txrx_pdev_handle pdev)
 	 */
 }
 
+static void ol_txrx_tso_stats_clear(ol_txrx_pdev_handle pdev)
+{
+	/*
+	 * keeping the body empty and not keeping an error print as print will
+	 * will show up everytime during driver unload if TSO is not enabled.
+	 */
+}
 #endif /* defined(FEATURE_TSO) && defined(FEATURE_TSO_DEBUG) */
+
+/**
+ * ol_txrx_read_dpt_buff_debugfs() - read dp trace buffer
+ * @file: file to read
+ * @arg: pdev object
+ *
+ * Return: QDF_STATUS
+ */
+static QDF_STATUS ol_txrx_read_dpt_buff_debugfs(qdf_debugfs_file_t file,
+						void *arg)
+{
+	struct ol_txrx_pdev_t *pdev = (struct ol_txrx_pdev_t *)arg;
+	uint32_t i = 0;
+	QDF_STATUS status = QDF_STATUS_SUCCESS;
+
+	if (pdev->state == QDF_DPT_DEBUGFS_STATE_SHOW_STATE_INVALID)
+		return QDF_STATUS_E_INVAL;
+	else if (pdev->state == QDF_DPT_DEBUGFS_STATE_SHOW_COMPLETE) {
+		pdev->state = QDF_DPT_DEBUGFS_STATE_SHOW_STATE_INIT;
+		return QDF_STATUS_SUCCESS;
+	}
+
+	i = qdf_dpt_get_curr_pos_debugfs(file, pdev->state);
+	status =  qdf_dpt_dump_stats_debugfs(file, i);
+	if (status == QDF_STATUS_E_FAILURE)
+		pdev->state = QDF_DPT_DEBUGFS_STATE_SHOW_IN_PROGRESS;
+	else if (status == QDF_STATUS_SUCCESS)
+		pdev->state = QDF_DPT_DEBUGFS_STATE_SHOW_COMPLETE;
+
+	return status;
+}
+
+/**
+ * ol_txrx_conv_str_to_int_debugfs() - convert string to int
+ * @buf: buffer containing string
+ * @len: buffer len
+ * @proto_bitmap: defines the protocol to be tracked
+ * @nr_records: defines the nth packet which is traced
+ * @verbosity: defines the verbosity level
+ *
+ * This function expects char buffer to be null terminated.
+ * Otherwise results could be unexpected values.
+ *
+ * Return: 0 on success
+ */
+static int ol_txrx_conv_str_to_int_debugfs(char *buf, qdf_size_t len,
+					   int *proto_bitmap,
+					   int *nr_records,
+					   int *verbosity)
+{
+	int num_value = DPT_SET_PARAM_PROTO_BITMAP;
+	int ret, param_value = 0;
+	char *buf_param = buf;
+	int i;
+
+	for (i = 1; i < DPT_SET_PARAM_MAX; i++) {
+		/* Loop till you reach space as kstrtoint operates till
+		 * null character. Replace space with null character
+		 * to read each value.
+		 * terminate the loop either at null terminated char or
+		 * len is 0.
+		 */
+		while (*buf && len) {
+			if (*buf == ' ') {
+				*buf = '\0';
+				buf++;
+				len--;
+				break;
+			}
+			buf++;
+			len--;
+		}
+		/* get the parameter */
+		ret = qdf_kstrtoint(buf_param,
+				    DPT_DEBUGFS_NUMBER_BASE,
+				    &param_value);
+		if (ret) {
+			QDF_TRACE(QDF_MODULE_ID_TXRX,
+				  QDF_TRACE_LEVEL_ERROR,
+				  "%s: Error while parsing buffer. ret %d",
+				  __func__, ret);
+			return ret;
+		}
+		switch (num_value) {
+		case DPT_SET_PARAM_PROTO_BITMAP:
+			*proto_bitmap = param_value;
+			break;
+		case DPT_SET_PARAM_NR_RECORDS:
+			*nr_records = param_value;
+			break;
+		case DPT_SET_PARAM_VERBOSITY:
+			*verbosity = param_value;
+			break;
+		default:
+			QDF_TRACE(QDF_MODULE_ID_TXRX, QDF_TRACE_LEVEL_ERROR,
+				"%s %d: :Set command needs exactly 3 arguments in format <proto_bitmap> <number of record> <Verbosity>.",
+				__func__, __LINE__);
+			break;
+		}
+		num_value++;
+		/*buf_param should now point to the next param value. */
+		buf_param = buf;
+	}
+
+	/* buf is not yet NULL implies more than 3 params are passed. */
+	if (*buf) {
+		QDF_TRACE(QDF_MODULE_ID_TXRX, QDF_TRACE_LEVEL_ERROR,
+			"%s %d: :Set command needs exactly 3 arguments in format <proto_bitmap> <number of record> <Verbosity>.",
+			__func__, __LINE__);
+		return -EINVAL;
+	}
+	return 0;
+}
+
+
+/**
+ * ol_txrx_write_dpt_buff_debugfs() - set dp trace parameters
+ * @priv: pdev object
+ * @buf: buff to get value for dpt parameters
+ * @len: buf length
+ *
+ * Return: QDF_STATUS
+ */
+static QDF_STATUS ol_txrx_write_dpt_buff_debugfs(void *priv,
+					      const char *buf,
+					      qdf_size_t len)
+{
+	int ret;
+	int proto_bitmap = 0;
+	int nr_records = 0;
+	int verbosity = 0;
+	char *buf1 = NULL;
+
+	if (!buf || !len) {
+		QDF_TRACE(QDF_MODULE_ID_TXRX, QDF_TRACE_LEVEL_ERROR,
+				"%s: null buffer or len. len %u",
+				__func__, (uint8_t)len);
+		return QDF_STATUS_E_FAULT;
+	}
+
+	buf1 = (char *)qdf_mem_malloc(len);
+	if (!buf1) {
+		QDF_TRACE(QDF_MODULE_ID_TXRX, QDF_TRACE_LEVEL_ERROR,
+				"%s: qdf_mem_malloc failure",
+				__func__);
+		return QDF_STATUS_E_FAULT;
+	}
+	qdf_mem_copy(buf1, buf, len);
+	ret = ol_txrx_conv_str_to_int_debugfs(buf1, len, &proto_bitmap,
+					      &nr_records, &verbosity);
+	if (ret) {
+		qdf_mem_free(buf1);
+		return QDF_STATUS_E_INVAL;
+	}
+
+	qdf_dpt_set_value_debugfs(proto_bitmap, nr_records, verbosity);
+	qdf_mem_free(buf1);
+	return QDF_STATUS_SUCCESS;
+}
+
+static int ol_txrx_debugfs_init(struct ol_txrx_pdev_t *pdev)
+{
+	pdev->dpt_debugfs_fops.show = ol_txrx_read_dpt_buff_debugfs;
+	pdev->dpt_debugfs_fops.write = ol_txrx_write_dpt_buff_debugfs;
+	pdev->dpt_debugfs_fops.priv = pdev;
+
+	pdev->dpt_stats_log_dir = qdf_debugfs_create_dir("dpt_stats", NULL);
+
+	if (!pdev->dpt_stats_log_dir) {
+		QDF_TRACE(QDF_MODULE_ID_TXRX, QDF_TRACE_LEVEL_ERROR,
+				"%s: error while creating debugfs dir for %s",
+				__func__, "dpt_stats");
+		pdev->state = QDF_DPT_DEBUGFS_STATE_SHOW_STATE_INVALID;
+		return -EBUSY;
+	}
+
+	if (!qdf_debugfs_create_file("dump_set_dpt_logs", DPT_DEBUGFS_PERMS,
+				     pdev->dpt_stats_log_dir,
+				     &pdev->dpt_debugfs_fops)) {
+		QDF_TRACE(QDF_MODULE_ID_TXRX, QDF_TRACE_LEVEL_ERROR,
+				"%s: debug Entry creation failed!",
+				__func__);
+		pdev->state = QDF_DPT_DEBUGFS_STATE_SHOW_STATE_INVALID;
+		return -EBUSY;
+	}
+
+	pdev->state = QDF_DPT_DEBUGFS_STATE_SHOW_STATE_INIT;
+	return 0;
+}
 
 /**
  * ol_txrx_pdev_attach() - allocate txrx pdev
@@ -1238,8 +1459,10 @@ ol_txrx_pdev_attach(ol_pdev_handle ctrl_pdev,
 
 	TXRX_STATS_INIT(pdev);
 	ol_txrx_tso_stats_init(pdev);
+	ol_txrx_fw_stats_desc_pool_init(pdev, FW_STATS_DESC_POOL_SIZE);
 
 	TAILQ_INIT(&pdev->vdev_list);
+	TAILQ_INIT(&pdev->roam_stale_peer_list);
 
 	TAILQ_INIT(&pdev->req_list);
 	pdev->req_list_depth = 0;
@@ -1289,6 +1512,8 @@ ol_txrx_pdev_attach(ol_pdev_handle ctrl_pdev,
 	pdev->tid_to_ac[OL_TX_NUM_TIDS + OL_TX_VDEV_DEFAULT_MGMT] =
 		OL_TX_SCHED_WRR_ADV_CAT_MCAST_MGMT;
 
+	ol_txrx_debugfs_init(pdev);
+
 	return pdev;
 
 fail3:
@@ -1300,6 +1525,7 @@ fail2:
 
 fail1:
 	ol_txrx_tso_stats_deinit(pdev);
+	ol_txrx_fw_stats_desc_pool_deinit(pdev);
 	qdf_mem_free(pdev);
 
 fail0:
@@ -1336,7 +1562,7 @@ void htt_pkt_log_init(struct ol_txrx_pdev_t *handle, void *scn)
  *
  * Return: void
  */
-static void htt_pktlogmod_exit(struct ol_txrx_pdev_t *handle, void *scn)
+void htt_pktlogmod_exit(struct ol_txrx_pdev_t *handle, void *scn)
 {
 	if (scn && cds_get_conparam() != QDF_GLOBAL_FTM_MODE &&
 		!QDF_IS_EPPING_ENABLED(cds_get_conparam()) &&
@@ -1347,7 +1573,7 @@ static void htt_pktlogmod_exit(struct ol_txrx_pdev_t *handle, void *scn)
 }
 #else
 void htt_pkt_log_init(ol_txrx_pdev_handle handle, void *ol_sc) { }
-static void htt_pktlogmod_exit(ol_txrx_pdev_handle handle, void *sc)  { }
+void htt_pktlogmod_exit(ol_txrx_pdev_handle handle, void *sc)  { }
 #endif
 
 /**
@@ -2021,6 +2247,11 @@ void ol_txrx_pdev_pre_detach(ol_txrx_pdev_handle pdev, int force)
 #endif
 }
 
+static void ol_txrx_debugfs_exit(ol_txrx_pdev_handle pdev)
+{
+	qdf_debugfs_remove_dir_recursive(pdev->dpt_stats_log_dir);
+}
+
 /**
  * ol_txrx_pdev_detach() - delete the data SW state
  * @pdev - the data physical device object being removed
@@ -2034,7 +2265,7 @@ void ol_txrx_pdev_pre_detach(ol_txrx_pdev_handle pdev, int force)
  */
 void ol_txrx_pdev_detach(ol_txrx_pdev_handle pdev)
 {
-	struct ol_txrx_stats_req_internal *req;
+	struct ol_txrx_stats_req_internal *req, *temp_req;
 	int i = 0;
 
 	/*checking to ensure txrx pdev structure is not NULL */
@@ -2050,7 +2281,7 @@ void ol_txrx_pdev_detach(ol_txrx_pdev_handle pdev)
 			"Warning: the txrx req list is not empty, depth=%d\n",
 			pdev->req_list_depth
 			);
-	TAILQ_FOREACH(req, &pdev->req_list, req_list_elem) {
+	TAILQ_FOREACH_SAFE(req, &pdev->req_list, req_list_elem, temp_req) {
 		TAILQ_REMOVE(&pdev->req_list, req, req_list_elem);
 		pdev->req_list_depth--;
 		ol_txrx_err(
@@ -2078,9 +2309,12 @@ void ol_txrx_pdev_detach(ol_txrx_pdev_handle pdev)
 	htt_pdev_free(pdev->htt_pdev);
 	ol_txrx_peer_find_detach(pdev);
 	ol_txrx_tso_stats_deinit(pdev);
+	ol_txrx_fw_stats_desc_pool_deinit(pdev);
 
 	ol_txrx_pdev_txq_log_destroy(pdev);
 	ol_txrx_pdev_grp_stat_destroy(pdev);
+
+	ol_txrx_debugfs_exit(pdev);
 }
 
 #if defined(CONFIG_PER_VDEV_TX_DESC_POOL)
@@ -2237,6 +2471,8 @@ void ol_txrx_vdev_register(ol_txrx_vdev_handle vdev,
 
 	vdev->osif_dev = osif_vdev;
 	vdev->rx = txrx_ops->rx.rx;
+	vdev->stats_rx = txrx_ops->rx.stats_rx;
+	vdev->tx_comp = txrx_ops->tx.tx_comp;
 	txrx_ops->tx.tx = ol_tx_data;
 }
 
@@ -2283,7 +2519,7 @@ void ol_txrx_set_drop_unenc(ol_txrx_vdev_handle vdev, uint32_t val)
 	vdev->drop_unenc = val;
 }
 
-#if defined(CONFIG_HL_SUPPORT)
+#if defined(CONFIG_HL_SUPPORT) || defined(QCA_LL_LEGACY_TX_FLOW_CONTROL)
 
 static void
 ol_txrx_tx_desc_reset_vdev(ol_txrx_vdev_handle vdev)
@@ -2302,14 +2538,31 @@ ol_txrx_tx_desc_reset_vdev(ol_txrx_vdev_handle vdev)
 }
 
 #else
-
-static void
-ol_txrx_tx_desc_reset_vdev(ol_txrx_vdev_handle vdev)
+#ifdef QCA_LL_TX_FLOW_CONTROL_V2
+static void ol_txrx_tx_desc_reset_vdev(ol_txrx_vdev_handle vdev)
 {
+	struct ol_txrx_pdev_t *pdev = vdev->pdev;
+	struct ol_tx_flow_pool_t *pool;
+	int i;
+	struct ol_tx_desc_t *tx_desc;
 
+	qdf_spin_lock_bh(&pdev->tx_desc.flow_pool_list_lock);
+	for (i = 0; i < pdev->tx_desc.pool_size; i++) {
+		tx_desc = ol_tx_desc_find(pdev, i);
+		if (!qdf_atomic_read(&tx_desc->ref_cnt))
+			/* not in use */
+			continue;
+
+		pool = tx_desc->pool;
+		qdf_spin_lock_bh(&pool->flow_pool_lock);
+		if (tx_desc->vdev == vdev)
+			tx_desc->vdev = NULL;
+		qdf_spin_unlock_bh(&pool->flow_pool_lock);
+	}
+	qdf_spin_unlock_bh(&pdev->tx_desc.flow_pool_list_lock);
 }
-
-#endif
+#endif /* QCA_LL_TX_FLOW_CONTROL_V2 */
+#endif /* CONFIG_HL_SUPPORT */
 
 /**
  * ol_txrx_vdev_detach - Deallocate the specified data virtual
@@ -3253,6 +3506,35 @@ ol_txrx_peer_qoscapable_get(struct ol_txrx_pdev_t *txrx_pdev, uint16_t peer_id)
 	return 0;
 }
 
+bool ol_txrx_is_peer_eligible_for_deletion(ol_txrx_peer_handle peer,
+					   struct ol_txrx_pdev_t *pdev)
+{
+	bool peerdel = true;
+	u_int16_t peer_id;
+	int i;
+
+	for (i = 0; i < MAX_NUM_PEER_ID_PER_PEER; i++) {
+		peer_id = peer->peer_ids[i];
+
+		if (peer_id == HTT_INVALID_PEER)
+			continue;
+
+		if (!pdev->peer_id_to_obj_map[peer_id].peer_ref)
+			continue;
+
+		if (pdev->peer_id_to_obj_map[peer_id].peer_ref != peer)
+			continue;
+
+		if (qdf_atomic_read(&pdev->peer_id_to_obj_map[peer_id].
+					del_peer_id_ref_cnt)) {
+			peerdel = false;
+			break;
+		}
+
+		pdev->peer_id_to_obj_map[peer_id].peer_ref = NULL;
+	}
+	return peerdel;
+}
 int ol_txrx_peer_unref_delete(ol_txrx_peer_handle peer,
 					const char *fname,
 					int line)
@@ -3435,7 +3717,32 @@ int ol_txrx_peer_unref_delete(ol_txrx_peer_handle peer,
 			}
 		}
 
-		qdf_mem_free(peer);
+		qdf_spin_lock_bh(&pdev->peer_map_unmap_lock);
+		if (ol_txrx_is_peer_eligible_for_deletion(peer, pdev)) {
+			qdf_mem_free(peer);
+		} else {
+			/*
+			 * Mark this PEER as a stale peer, to be deleted
+			 * during PEER UNMAP. Remove this peer from
+			 * roam_stale_peer_list during UNMAP.
+			 */
+			struct ol_txrx_roam_stale_peer_t *roam_stale_peer;
+
+			roam_stale_peer = qdf_mem_malloc(
+				sizeof(struct ol_txrx_roam_stale_peer_t));
+			if (roam_stale_peer) {
+				roam_stale_peer->peer = peer;
+				TAILQ_INSERT_TAIL(&pdev->roam_stale_peer_list,
+						  roam_stale_peer,
+						  next_stale_entry);
+			} else {
+				QDF_TRACE(QDF_MODULE_ID_TXRX,
+					  QDF_TRACE_LEVEL_ERROR,
+					  "[%s][%d]: No memory allocated",
+					  fname, line);
+			}
+		}
+		qdf_spin_unlock_bh(&pdev->peer_map_unmap_lock);
 	} else {
 		qdf_spin_unlock_bh(&pdev->peer_ref_mutex);
 		QDF_TRACE(QDF_MODULE_ID_TXRX, QDF_TRACE_LEVEL_INFO_HIGH,
@@ -3511,7 +3818,7 @@ QDF_STATUS ol_txrx_clear_peer(uint8_t sta_id)
  *
  * Return: none
  */
-void peer_unmap_timer_handler(void *data)
+void peer_unmap_timer_handler(unsigned long data)
 {
 	ol_txrx_peer_handle peer = (ol_txrx_peer_handle)data;
 
@@ -3828,11 +4135,152 @@ void
 ol_txrx_fw_stats_cfg(ol_txrx_vdev_handle vdev,
 		     uint8_t cfg_stats_type, uint32_t cfg_val)
 {
-	uint64_t dummy_cookie = 0;
+	uint8_t dummy_cookie = 0;
 
 	htt_h2t_dbg_stats_get(vdev->pdev->htt_pdev, 0 /* upload mask */,
 			      0 /* reset mask */,
 			      cfg_stats_type, cfg_val, dummy_cookie);
+}
+
+/**
+ * ol_txrx_fw_stats_desc_pool_init() - Initialize the fw stats descriptor pool
+ * @pdev: handle to ol txrx pdev
+ * @pool_size: Size of fw stats descriptor pool
+ *
+ * Return: 0 for success, error code on failure.
+ */
+int ol_txrx_fw_stats_desc_pool_init(struct ol_txrx_pdev_t *pdev,
+				    uint8_t pool_size)
+{
+	int i;
+
+	if (!pdev) {
+		ol_txrx_err("%s: pdev is NULL", __func__);
+		return -EINVAL;
+	}
+	pdev->ol_txrx_fw_stats_desc_pool.pool = qdf_mem_malloc(pool_size *
+		sizeof(struct ol_txrx_fw_stats_desc_elem_t));
+	if (!pdev->ol_txrx_fw_stats_desc_pool.pool) {
+		ol_txrx_err("%s: failed to allocate desc pool", __func__);
+		return -ENOMEM;
+	}
+	pdev->ol_txrx_fw_stats_desc_pool.freelist =
+		&pdev->ol_txrx_fw_stats_desc_pool.pool[0];
+	pdev->ol_txrx_fw_stats_desc_pool.pool_size = pool_size;
+
+	for (i = 0; i < (pool_size - 1); i++) {
+		pdev->ol_txrx_fw_stats_desc_pool.pool[i].desc.desc_id = i;
+		pdev->ol_txrx_fw_stats_desc_pool.pool[i].desc.req = NULL;
+		pdev->ol_txrx_fw_stats_desc_pool.pool[i].next =
+			&pdev->ol_txrx_fw_stats_desc_pool.pool[i + 1];
+	}
+	pdev->ol_txrx_fw_stats_desc_pool.pool[i].desc.desc_id = i;
+	pdev->ol_txrx_fw_stats_desc_pool.pool[i].desc.req = NULL;
+	pdev->ol_txrx_fw_stats_desc_pool.pool[i].next = NULL;
+	qdf_spinlock_create(&pdev->ol_txrx_fw_stats_desc_pool.pool_lock);
+	qdf_atomic_init(&pdev->ol_txrx_fw_stats_desc_pool.initialized);
+	qdf_atomic_set(&pdev->ol_txrx_fw_stats_desc_pool.initialized, 1);
+	return 0;
+}
+
+/**
+ * ol_txrx_fw_stats_desc_pool_deinit() - Deinitialize the
+ * fw stats descriptor pool
+ * @pdev: handle to ol txrx pdev
+ *
+ * Return: None
+ */
+void ol_txrx_fw_stats_desc_pool_deinit(struct ol_txrx_pdev_t *pdev)
+{
+	if (!pdev) {
+		ol_txrx_err("%s: pdev is NULL", __func__);
+		return;
+	}
+	if (!qdf_atomic_read(&pdev->ol_txrx_fw_stats_desc_pool.initialized)) {
+		ol_txrx_err("%s: Pool is not initialized", __func__);
+		return;
+	}
+	if (!pdev->ol_txrx_fw_stats_desc_pool.pool) {
+		ol_txrx_err("%s: Pool is not allocated", __func__);
+		return;
+	}
+
+	qdf_spin_lock_bh(&pdev->ol_txrx_fw_stats_desc_pool.pool_lock);
+	qdf_atomic_set(&pdev->ol_txrx_fw_stats_desc_pool.initialized, 0);
+	qdf_mem_free(pdev->ol_txrx_fw_stats_desc_pool.pool);
+	pdev->ol_txrx_fw_stats_desc_pool.pool = NULL;
+
+	pdev->ol_txrx_fw_stats_desc_pool.freelist = NULL;
+	pdev->ol_txrx_fw_stats_desc_pool.pool_size = 0;
+	qdf_spin_unlock_bh(&pdev->ol_txrx_fw_stats_desc_pool.pool_lock);
+}
+
+/**
+ * ol_txrx_fw_stats_desc_alloc() - Get fw stats descriptor from fw stats
+ * free descriptor pool
+ * @pdev: handle to ol txrx pdev
+ *
+ * Return: pointer to fw stats descriptor, NULL on failure
+ */
+struct ol_txrx_fw_stats_desc_t
+	*ol_txrx_fw_stats_desc_alloc(struct ol_txrx_pdev_t *pdev)
+{
+	struct ol_txrx_fw_stats_desc_t *desc = NULL;
+
+	qdf_spin_lock_bh(&pdev->ol_txrx_fw_stats_desc_pool.pool_lock);
+	if (!qdf_atomic_read(&pdev->ol_txrx_fw_stats_desc_pool.initialized)) {
+		qdf_spin_unlock_bh(&pdev->
+				   ol_txrx_fw_stats_desc_pool.pool_lock);
+		ol_txrx_err("%s: Pool deinitialized", __func__);
+		return NULL;
+	}
+	if (pdev->ol_txrx_fw_stats_desc_pool.freelist) {
+		desc = &pdev->ol_txrx_fw_stats_desc_pool.freelist->desc;
+		pdev->ol_txrx_fw_stats_desc_pool.freelist =
+			pdev->ol_txrx_fw_stats_desc_pool.freelist->next;
+	}
+	qdf_spin_unlock_bh(&pdev->ol_txrx_fw_stats_desc_pool.pool_lock);
+
+	if (desc)
+		ol_txrx_dbg("%s: desc_id %d allocated",
+			    __func__, desc->desc_id);
+	else
+		ol_txrx_err("%s: fw stats descriptors are exhausted", __func__);
+
+	return desc;
+}
+
+/**
+ * ol_txrx_fw_stats_desc_get_req() - Put fw stats descriptor
+ * back into free pool
+ * @pdev: handle to ol txrx pdev
+ * @fw_stats_desc: fw_stats_desc_get descriptor
+ *
+ * Return: pointer to request
+ */
+struct ol_txrx_stats_req_internal
+	*ol_txrx_fw_stats_desc_get_req(struct ol_txrx_pdev_t *pdev,
+				       unsigned char desc_id)
+{
+	struct ol_txrx_fw_stats_desc_elem_t *desc_elem;
+	struct ol_txrx_stats_req_internal *req;
+
+	qdf_spin_lock_bh(&pdev->ol_txrx_fw_stats_desc_pool.pool_lock);
+	if (!qdf_atomic_read(&pdev->ol_txrx_fw_stats_desc_pool.initialized)) {
+		qdf_spin_unlock_bh(&pdev->
+				   ol_txrx_fw_stats_desc_pool.pool_lock);
+		ol_txrx_err("%s: Desc ID %u Pool deinitialized",
+			    __func__, desc_id);
+		return NULL;
+	}
+	desc_elem = &pdev->ol_txrx_fw_stats_desc_pool.pool[desc_id];
+	req = desc_elem->desc.req;
+	desc_elem->desc.req = NULL;
+	desc_elem->next =
+		pdev->ol_txrx_fw_stats_desc_pool.freelist;
+	pdev->ol_txrx_fw_stats_desc_pool.freelist = desc_elem;
+	qdf_spin_unlock_bh(&pdev->ol_txrx_fw_stats_desc_pool.pool_lock);
+	return req;
 }
 
 A_STATUS
@@ -3840,8 +4288,10 @@ ol_txrx_fw_stats_get(ol_txrx_vdev_handle vdev, struct ol_txrx_stats_req *req,
 			bool per_vdev, bool response_expected)
 {
 	struct ol_txrx_pdev_t *pdev = vdev->pdev;
-	uint64_t cookie;
+	uint8_t cookie = FW_STATS_DESC_POOL_SIZE;
 	struct ol_txrx_stats_req_internal *non_volatile_req;
+	struct ol_txrx_fw_stats_desc_t *desc = NULL;
+	struct ol_txrx_fw_stats_desc_elem_t *elem = NULL;
 
 	if (!pdev ||
 	    req->stats_type_upload_mask >= 1 << HTT_DBG_NUM_STATS ||
@@ -3861,11 +4311,16 @@ ol_txrx_fw_stats_get(ol_txrx_vdev_handle vdev, struct ol_txrx_stats_req *req,
 	non_volatile_req->base = *req;
 	non_volatile_req->serviced = 0;
 	non_volatile_req->offset = 0;
-
-	/* use the non-volatile request object's address as the cookie */
-	cookie = ol_txrx_stats_ptr_to_u64(non_volatile_req);
-
 	if (response_expected) {
+		desc = ol_txrx_fw_stats_desc_alloc(pdev);
+		if (!desc) {
+			qdf_mem_free(non_volatile_req);
+			return A_ERROR;
+		}
+
+		/* use the desc id as the cookie */
+		cookie = desc->desc_id;
+		desc->req = non_volatile_req;
 		qdf_spin_lock_bh(&pdev->req_list_spinlock);
 		TAILQ_INSERT_TAIL(&pdev->req_list, non_volatile_req, req_list_elem);
 		pdev->req_list_depth++;
@@ -3879,9 +4334,28 @@ ol_txrx_fw_stats_get(ol_txrx_vdev_handle vdev, struct ol_txrx_stats_req *req,
 				  cookie)) {
 		if (response_expected) {
 			qdf_spin_lock_bh(&pdev->req_list_spinlock);
-			TAILQ_REMOVE(&pdev->req_list, non_volatile_req, req_list_elem);
+			TAILQ_REMOVE(&pdev->req_list, non_volatile_req,
+				     req_list_elem);
 			pdev->req_list_depth--;
 			qdf_spin_unlock_bh(&pdev->req_list_spinlock);
+			if (desc) {
+				qdf_spin_lock_bh(&pdev->
+						 ol_txrx_fw_stats_desc_pool.
+						 pool_lock);
+				desc->req = NULL;
+				elem = container_of(desc,
+						    struct
+						    ol_txrx_fw_stats_desc_elem_t,
+						    desc);
+				elem->next =
+					pdev->ol_txrx_fw_stats_desc_pool.
+					freelist;
+				pdev->ol_txrx_fw_stats_desc_pool.
+					freelist = elem;
+				qdf_spin_unlock_bh(&pdev->
+						   ol_txrx_fw_stats_desc_pool.
+						   pool_lock);
+			}
 		}
 
 		qdf_mem_free(non_volatile_req);
@@ -3896,7 +4370,7 @@ ol_txrx_fw_stats_get(ol_txrx_vdev_handle vdev, struct ol_txrx_stats_req *req,
 
 void
 ol_txrx_fw_stats_handler(ol_txrx_pdev_handle pdev,
-			 uint64_t cookie, uint8_t *stats_info_list)
+			 uint8_t cookie, uint8_t *stats_info_list)
 {
 	enum htt_dbg_stats_type type;
 	enum htt_dbg_stats_status status;
@@ -3906,8 +4380,16 @@ ol_txrx_fw_stats_handler(ol_txrx_pdev_handle pdev,
 	int more = 0;
 	int found = 0;
 
-	req = ol_txrx_u64_to_stats_ptr(cookie);
-
+	if (cookie >= FW_STATS_DESC_POOL_SIZE) {
+		ol_txrx_err("%s: Cookie is not valid", __func__);
+		return;
+	}
+	req = ol_txrx_fw_stats_desc_get_req(pdev, (uint8_t)cookie);
+	if (!req) {
+		ol_txrx_err("%s: Request not retrieved for cookie %u", __func__,
+			    (uint8_t)cookie);
+		return;
+	}
 	qdf_spin_lock_bh(&pdev->req_list_spinlock);
 	TAILQ_FOREACH(tmp, &pdev->req_list, req_list_elem) {
 		if (req == tmp) {
@@ -4873,6 +5355,9 @@ QDF_STATUS ol_txrx_clear_stats(uint16_t value)
 	case WLAN_TXRX_STATS:
 		ol_txrx_stats_clear(pdev);
 		break;
+	case WLAN_TXRX_TSO_STATS:
+		ol_txrx_tso_stats_clear(pdev);
+		break;
 	case WLAN_DUMP_TX_FLOW_POOL_INFO:
 		ol_tx_clear_flow_pool_stats();
 		break;
@@ -4936,9 +5421,10 @@ static inline int ol_txrx_drop_nbuf_list(qdf_nbuf_t buf_list)
  *
  * Return: None
  */
-static void ol_rx_data_cb(struct ol_txrx_pdev_t *pdev,
-			  qdf_nbuf_t buf_list, uint16_t staid)
+static void ol_rx_data_cb(void *_pdev, void *_buf_list, uint16_t staid)
 {
+	struct ol_txrx_pdev_t *pdev = (struct ol_txrx_pdev_t *)_pdev;
+	qdf_nbuf_t buf_list = (qdf_nbuf_t)_buf_list;
 	void *cds_ctx = cds_get_global_context();
 	void *osif_dev;
 	uint8_t drop_count = 0;
@@ -5138,8 +5624,7 @@ void ol_rx_data_process(struct ol_txrx_peer_t *peer,
 			if (!pkt)
 				goto drop_rx_buf;
 
-			pkt->callback = (cds_ol_rx_thread_cb)
-					ol_rx_data_cb;
+			pkt->callback = ol_rx_data_cb;
 			pkt->context = (void *)pdev;
 			pkt->Rxpkt = (void *)rx_buf_list;
 			pkt->staId = peer->local_id;
@@ -5705,4 +6190,9 @@ QDF_STATUS ol_txrx_set_wisa_mode(ol_txrx_vdev_handle vdev, bool enable)
 
 	vdev->is_wisa_mode_enable = enable;
 	return QDF_STATUS_SUCCESS;
+}
+
+int ol_txrx_rx_hash_smmu_map(ol_txrx_pdev_handle pdev, bool map)
+{
+	return htt_rx_hash_smmu_map_update(pdev->htt_pdev, map);
 }

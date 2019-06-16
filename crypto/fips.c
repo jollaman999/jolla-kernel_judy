@@ -31,9 +31,6 @@ static int fips_enable(char *str)
 
 __setup("fips=", fips_enable);
 
-/* We should consider that ccmode might be supported.
-	Fips related table will be registered in proc.c. */
-#ifndef CONFIG_CRYPTO_CCMODE
 static struct ctl_table crypto_sysctl_table[] = {
 	{
 		.procname       = "fips_enabled",
@@ -76,16 +73,6 @@ static void __exit fips_exit(void)
 {
 	crypto_proc_fips_exit();
 }
-#else
-static int __init fips_init(void)
-{
-	return 0;
-}
-
-static void __exit fips_exit(void)
-{
-}
-#endif	// CONFIG_CRYPTO_CCMODE
 
 module_init(fips_init);
 module_exit(fips_exit);

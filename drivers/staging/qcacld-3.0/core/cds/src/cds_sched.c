@@ -1,8 +1,5 @@
 /*
- * Copyright (c) 2014-2017 The Linux Foundation. All rights reserved.
- *
- * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
- *
+ * Copyright (c) 2014-2018 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -17,12 +14,6 @@
  * PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
  * TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
  * PERFORMANCE OF THIS SOFTWARE.
- */
-
-/*
- * This file was originally distributed by Qualcomm Atheros, Inc.
- * under proprietary terms before Copyright ownership was assigned
- * to the Linux Foundation.
  */
 
 /**
@@ -358,7 +349,8 @@ __cds_cpu_hotplug_notify(struct notifier_block *block,
 	if ((NULL == pSchedContext) || (NULL == pSchedContext->ol_rx_thread))
 		return NOTIFY_OK;
 
-	if (cds_is_load_or_unload_in_progress())
+	if (cds_is_load_or_unload_in_progress() ||
+	    cds_is_module_stop_in_progress() || cds_is_driver_recovering())
 		return NOTIFY_OK;
 
 	num_cpus = num_possible_cpus();
@@ -409,7 +401,8 @@ __cds_cpu_hotplug_notify(struct notifier_block *block,
 	if (pref_cpu == 0)
 		return NOTIFY_OK;
 
-	if (!cds_set_cpus_allowed_ptr(pSchedContext->ol_rx_thread, pref_cpu))
+	if (pSchedContext->ol_rx_thread &&
+	    !cds_set_cpus_allowed_ptr(pSchedContext->ol_rx_thread, pref_cpu))
 		affine_cpu = pref_cpu;
 
 	return NOTIFY_OK;
@@ -611,13 +604,13 @@ static void cds_mc_thread_watchdog_notify(cds_msg_t *msg)
 	if (msg->callback)
 		qdf_sprint_symbol(symbol, msg->callback);
 
-	cds_err("Callback %s (type 0x%x) exceeded its allotted time of %ds",
+	cds_err("WLAN_BUG_RCA: Callback %s (type 0x%x) exceeded its allotted time of %ds",
 		msg->callback ? symbol : "<null>", msg->type,
 		MC_THRD_WD_TIMEOUT / 1000);
 }
 
 #ifdef CONFIG_SLUB_DEBUG_ON
-static void cds_mc_thread_watchdog_timeout(void *arg)
+static void cds_mc_thread_watchdog_timeout(unsigned long arg)
 {
 	cds_msg_t *msg = *(cds_msg_t **)arg;
 
@@ -637,7 +630,7 @@ static void cds_mc_thread_watchdog_timeout(void *arg)
 	QDF_BUG(0);
 }
 #else
-static inline void cds_mc_thread_watchdog_timeout(void *arg)
+static inline void cds_mc_thread_watchdog_timeout(unsigned long arg)
 {
 	cds_msg_t *msg = *(cds_msg_t **)arg;
 
@@ -919,6 +912,8 @@ static int cds_mc_thread(void *Arg)
 	qdf_timer_free(&wd_timer);
 
 	complete_and_exit(&pSchedContext->McShutdown, 0);
+
+	return 0;
 } /* cds_mc_thread() */
 
 #ifdef QCA_CONFIG_SMP
@@ -1231,8 +1226,53 @@ static int cds_ol_rx_thread(void *arg)
 	QDF_TRACE(QDF_MODULE_ID_QDF, QDF_TRACE_LEVEL_DEBUG,
 		  "%s: Exiting CDS OL rx thread", __func__);
 	complete_and_exit(&pSchedContext->ol_rx_shutdown, 0);
+
+	return 0;
 }
 #endif
+
+void cds_remove_timer_from_sys_msg(uint32_t timer_cookie)
+{
+	p_cds_msg_wrapper msg_wrapper = NULL;
+	struct list_head *pos, *q;
+	unsigned long flags;
+	p_cds_mq_type sys_msgq;
+
+	if (!gp_cds_sched_context) {
+		cds_err("gp_cds_sched_context is null");
+		return;
+	}
+
+	if (!gp_cds_sched_context->McThread) {
+		cds_err("Cannot post message because MC thread is stopped");
+		return;
+	}
+
+	sys_msgq = &gp_cds_sched_context->sysMcMq;
+	/* No msg present in sys queue */
+	if (cds_is_mq_empty(sys_msgq))
+		return;
+
+	spin_lock_irqsave(&sys_msgq->mqLock, flags);
+	list_for_each_safe(pos, q, &sys_msgq->mqList) {
+		msg_wrapper = list_entry(pos, cds_msg_wrapper, msgNode);
+
+		if ((msg_wrapper->pVosMsg->type == SYS_MSG_ID_MC_TIMER) &&
+		    (msg_wrapper->pVosMsg->bodyval == timer_cookie)) {
+			/* return message to the Core */
+			list_del(pos);
+			spin_unlock_irqrestore(&sys_msgq->mqLock, flags);
+			QDF_TRACE(QDF_MODULE_ID_QDF, QDF_TRACE_LEVEL_DEBUG,
+				  "%s: removing timer message with cookie %d",
+				  __func__, timer_cookie);
+			cds_core_return_msg(gp_cds_sched_context->pVContext,
+					    msg_wrapper);
+			return;
+		}
+
+	}
+	spin_unlock_irqrestore(&sys_msgq->mqLock, flags);
+}
 
 /**
  * cds_sched_close() - close the cds scheduler

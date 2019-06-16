@@ -333,9 +333,7 @@ static void pinconf_dump_group(struct pinctrl_dev *pctldev,
 	if (ops && ops->pin_config_group_dbg_show)
 		ops->pin_config_group_dbg_show(pctldev, s, selector);
 }
-#ifdef CONFIG_LGE_PM
-extern bool msm_gpio_check_access(int gpio);
-#endif
+
 static int pinconf_groups_show(struct seq_file *s, void *what)
 {
 	struct pinctrl_dev *pctldev = s->private;
@@ -350,14 +348,7 @@ static int pinconf_groups_show(struct seq_file *s, void *what)
 		const char *gname = pctlops->get_group_name(pctldev, selector);
 
 		seq_printf(s, "%u (%s): ", selector, gname);
-#ifdef CONFIG_LGE_PM
-		if(msm_gpio_check_access(selector) == true)
-		{
-#endif
 		pinconf_dump_group(pctldev, s, selector, gname);
-#ifdef CONFIG_LGE_PM
-		}
-#endif
 		seq_printf(s, "\n");
 
 		selector++;

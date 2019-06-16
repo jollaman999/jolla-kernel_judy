@@ -56,7 +56,7 @@ static int __init lge_check_bootreason(char *reason)
 
 	return 1;
 }
-__setup("lge.bootreasoncode=", lge_check_bootreason);
+__setup("androidboot.product.lge.bootreasoncode=", lge_check_bootreason);
 
 int lge_get_bootreason(void)
 {
@@ -119,7 +119,7 @@ static int __init boot_cable_setup(char *boot_cable)
         return 1;
 }
 
-__setup("bootcable.type=", boot_cable_setup);
+__setup("androidboot.vendor.lge.hw.cable=", boot_cable_setup);
 
 cable_boot_type lge_get_boot_cable(void)
 {
@@ -278,7 +278,7 @@ static int __init board_revno_setup(char *rev_info)
 
 	return 1;
 }
-__setup("lge.rev=", board_revno_setup);
+__setup("androidboot.vendor.lge.hw.revision=", board_revno_setup);
 
 
 static int lge_bd_subrev = HW_SUB_REV_0;
@@ -312,7 +312,7 @@ static int __init board_subrevno_setup(char *subrev_info)
 
 	return 1;
 }
-__setup("lge.subrev=", board_subrevno_setup);
+__setup("androidboot.vendor.lge.hw.subrev=", board_subrevno_setup);
 
 
 /*
@@ -347,13 +347,44 @@ int __init lge_laf_mode_init(char *s)
 
 	return 1;
 }
-__setup("androidboot.laf=", lge_laf_mode_init);
+__setup("androidboot.vendor.lge.laf=", lge_laf_mode_init);
 
 lge_laf_mode_t lge_get_laf_mode(void)
 {
 	return lge_laf_mode;
 }
 #endif
+
+static int lge_hydra_name = HYDRA_PRIME;
+int __init hydra_name_init(char *s)
+{
+	if (!strcmp(s, "Alpha"))
+		lge_hydra_name = HYDRA_ALPHA;
+	else if (!strcmp(s, "Prime"))
+		lge_hydra_name = HYDRA_PRIME;
+	else if (!strcmp(s, "Plus"))
+		lge_hydra_name = HYDRA_PLUS;
+	else if (!strcmp(s, "Plus1"))
+		lge_hydra_name = HYDRA_PLUS1;
+	else if (!strcmp(s, "Plus2"))
+		lge_hydra_name = HYDRA_PLUS2;
+	else if (!strcmp(s, "Signature"))
+		lge_hydra_name = HYDRA_SIGNATURE;
+	else
+		lge_hydra_name = HYDRA_NONE;
+
+	pr_info("androidboot.vendor.lge.hydra: %d\n",lge_hydra_name);
+
+	return 1;
+}
+
+__setup("androidboot.vendor.lge.hydra=", hydra_name_init);
+
+enum lge_hydra_name lge_get_hydra_name(void)
+{
+	return lge_hydra_name;
+}
+EXPORT_SYMBOL(lge_get_hydra_name);
 
 #ifdef CONFIG_LGE_ONE_BINARY_SKU
 /* For LAOP SKU Carrier Support */
@@ -399,12 +430,12 @@ int __init lge_sku_carrier_init(char *s)
 
 	return 1;
 }
-__setup("lge.sku_carrier=", lge_sku_carrier_init);
+__setup("androidboot.vendor.lge.sku_carrier=", lge_sku_carrier_init);
 
 char *lge_sku_str[] ={
-        "KR_ALL", "LGU", "SKT", "KT", "KR_RESERVED", "NA_GSM", "NA_ATT", "NA_TMUS",
-        "NA_RESERVED1", "NA_RESERVED2", "NA_CDMA", "NA_VZW", "NA_SPR", "NA_RESERVED3",
-        "NA_ALL", "GLOBAL", "ASIA", "MEA", "EU", "SCA", "SKU_ERR"
+	"KR_ALL", "LGU", "SKT", "KT", "KR_RESERVED", "NA_GSM", "NA_ATT", "NA_TMUS",
+	"NA_RESERVED1", "NA_RESERVED2", "NA_CDMA", "NA_VZW", "NA_SPR", "NA_RESERVED3",
+	"NA_ALL", "GLOBAL", "ASIA", "MEA", "EU", "SCA", "SKU_ERR"
 };
 
 enum lge_sku_carrier_type lge_get_sku_carrier(void)
@@ -414,7 +445,7 @@ enum lge_sku_carrier_type lge_get_sku_carrier(void)
 
 char *lge_get_sku_carrier_str(void)
 {
-        return lge_sku_str[lge_sku_carrier];
+	return lge_sku_str[lge_sku_carrier];
 }
 EXPORT_SYMBOL(lge_get_sku_carrier);
 
@@ -475,30 +506,4 @@ enum lge_laop_operator_type lge_get_laop_operator(void)
 }
 EXPORT_SYMBOL(lge_get_laop_operator);
 
-static int lge_bd_hydra = HW_HYDRA_PRIME;
-char *lge_bd_hydra_str[] = {
-	"Alpha", "Prime", "Plus",
-};
-char *lge_get_board_hydra(void)
-{
-	return lge_bd_hydra_str[lge_bd_hydra];
-}
-enum hw_hydra_type lge_get_board_hydra_type(void)
-{
-	return lge_bd_hydra;
-}
-static int __init board_hydra_type_setup(char *hydratype_info)
-{
-	int i;
-	for (i = 0; i < HW_HYDRA_MAX; i++) {
-		if (!strncmp(hydratype_info, lge_bd_hydra_str[i], 5)) {
-			lge_bd_hydra = i;
-			break;
-		}
-	}
-	pr_info("[LGE-HW-HYDRA] %s\n", lge_bd_hydra_str[lge_bd_hydra]);
-	pr_info("[LGE-HW-HYDRA_enum] %d\n", lge_get_board_hydra_type());
-	return 1;
-}
-__setup("lge.hydra=", board_hydra_type_setup);
 #endif

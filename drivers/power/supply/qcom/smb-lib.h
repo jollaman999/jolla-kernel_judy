@@ -1,4 +1,4 @@
-/* Copyright (c) 2016-2017 The Linux Foundation. All rights reserved.
+/* Copyright (c) 2016-2018 The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -71,6 +71,7 @@ enum print_reason {
 #define MOISTURE_VOTER			"MOISTURE_VOTER"
 #define HVDCP2_ICL_VOTER		"HVDCP2_ICL_VOTER"
 #define OV_VOTER			"OV_VOTER"
+#define FG_ESR_VOTER			"FG_ESR_VOTER"
 
 #define VCONN_MAX_ATTEMPTS	3
 #define OTG_MAX_ATTEMPTS	3
@@ -354,6 +355,7 @@ struct smb_charger {
 	bool			otg_present;
 	bool			is_audio_adapter;
 	bool			disable_stat_sw_override;
+	bool			in_chg_lock;
 
 	/* workaround flag */
 	u32			wa_flags;
@@ -362,6 +364,8 @@ struct smb_charger {
 	bool			try_sink_active;
 	int			boost_current_ua;
 	int			temp_speed_reading_count;
+	int			qc2_max_pulses;
+	bool			non_compliant_chg_detected;
 	bool			fake_usb_insertion;
 
 	/* extcon for VBUS / ID notification to USB for uUSB */
@@ -561,6 +565,7 @@ bool workaround_usb_compliance_mode_enabled(void);
 void workaround_force_incompatible_hvdcp_clear(struct smb_charger* chg);
 void workaround_force_incompatible_hvdcp_trigger(struct smb_charger* chg);
 void workaround_force_incompatible_hvdcp_require(void);
+bool workaround_force_incompatible_hvdcp_is_running(void);
 void workaround_recovering_abnormal_apsd_pdactive(struct smb_charger *chg, bool pd_active);
 void workaround_recovering_abnormal_apsd_pdreset(struct smb_charger *chg);
 void workaround_recovering_abnormal_apsd_dcp(struct smb_charger *chg);

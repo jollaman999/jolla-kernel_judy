@@ -237,11 +237,6 @@
 				lge,mdss-ddvdh-tuning-state = "dsi_lp_mode";
 				qcom,mode-control-dsi-state = "dsi_lp_mode";
 
-				qcom,mdss-dsi-read-powermode-command = [06 01 00 01 00 00 01 0a];
-				qcom,mdss-dsi-read-te-signal-status-command = [06 01 00 01 00 00 01 0e];
-				qcom,mdss-dsi-read-powermode-command-state = "dsi_lp_mode";
-				qcom,mdss-dsi-read-te-signal-status-command-state = "dsi_lp_mode";
-
 				qcom,mdss-dsi-h-sync-pulse = <0>;
 				qcom,compression-mode = "dsc";
 				qcom,mdss-dsc-slice-height = <16>;

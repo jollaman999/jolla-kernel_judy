@@ -50,6 +50,7 @@ static struct device_attribute dual_role_attrs[] = {
 	DUAL_ROLE_ATTR(control),
 	DUAL_ROLE_ATTR(cc1),
 	DUAL_ROLE_ATTR(cc2),
+	DUAL_ROLE_ATTR(pd_rev),
 	DUAL_ROLE_ATTR(pdo1),
 	DUAL_ROLE_ATTR(pdo2),
 	DUAL_ROLE_ATTR(pdo3),
@@ -252,11 +253,7 @@ EXPORT_SYMBOL_GPL(dual_role_get_drvdata);
 
 /* port type */
 static char *supported_modes_text[] = {
-#ifdef CONFIG_LGE_USB
-	"ufp dfp", "dfp", "ufp", "ufp dfp fault"
-#else
 	"ufp dfp", "dfp", "ufp"
-#endif
 };
 
 /* current mode */
@@ -300,6 +297,11 @@ static char *control_text[] = {
 /* CC */
 static char *cc_text[] = {
 	"Open", "Rp Default", "Rp 1.5A", "Rp 3.0A", "Rd", "Ra"
+};
+
+/* PD Revision */
+static char *pd_rev_text[] = {
+	"1.0", "2.0", "3.0", "reserved", "not supported", "none"
 };
 #endif
 
@@ -388,6 +390,14 @@ static ssize_t dual_role_show_property(struct device *dev,
 		if (value < DUAL_ROLE_PROP_CC_TOTAL)
 			return snprintf(buf, PAGE_SIZE, "%s\n",
 					cc_text[value]);
+		else
+			return -EIO;
+	} else if (off == DUAL_ROLE_PROP_PD_REV) {
+		BUILD_BUG_ON(DUAL_ROLE_PROP_PD_REV_TOTAL !=
+			     ARRAY_SIZE(pd_rev_text));
+		if (value < DUAL_ROLE_PROP_PD_REV_TOTAL)
+			return snprintf(buf, PAGE_SIZE, "%s\n",
+					pd_rev_text[value]);
 		else
 			return -EIO;
 	} else if (off == DUAL_ROLE_PROP_PDO1 ||
@@ -507,10 +517,15 @@ static ssize_t dual_role_store_property(struct device *dev,
 		value = result;
 		if (!ret)
 			goto setprop;
+#ifdef CONFIG_LGE_USB
+		ret = -EINVAL;
+		goto error;
+#else
 		break;
+#endif
 #ifdef CONFIG_LGE_USB
 	case DUAL_ROLE_PROP_CONTROL:
-		total = DUAL_ROLE_PROP_CONTROL_TOTAL;
+		total = DUAL_ROLE_PROP_CC_TOTAL;
 		text_array = control_text;
 		break;
 #endif
@@ -664,19 +679,9 @@ static void dual_role_changed_work(struct work_struct *work)
 	struct dual_role_phy_instance *dual_role =
 	    container_of(work, struct dual_role_phy_instance,
 			 changed_work);
-#ifdef CONFIG_LGE_USB
-	 struct attribute *temp;
-#endif
 
 	dev_dbg(&dual_role->dev, "%s\n", __func__);
-#ifdef CONFIG_LGE_USB
-	temp = __dual_role_attrs[DUAL_ROLE_PROP_MODE];
-	__dual_role_attrs[DUAL_ROLE_PROP_MODE] = __dual_role_attrs[DUAL_ROLE_PROP_MODE+1];
-#endif
 	sysfs_update_group(&dual_role->dev.kobj, &dual_role_attr_group);
-#ifdef CONFIG_LGE_USB
-	__dual_role_attrs[DUAL_ROLE_PROP_MODE] = temp;
-#endif
 	kobject_uevent(&dual_role->dev.kobj, KOBJ_CHANGE);
 }
 

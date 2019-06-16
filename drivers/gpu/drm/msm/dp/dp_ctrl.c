@@ -131,7 +131,7 @@ static void dp_ctrl_push_idle(struct dp_ctrl *dp_ctrl)
 
 	ctrl = container_of(dp_ctrl, struct dp_ctrl_private, dp_ctrl);
 
-	if (!ctrl->power_on){
+	if (!ctrl->power_on) {
 		pr_err("CTRL off, return\n");
 		return;
 	}
@@ -1438,6 +1438,7 @@ static int dp_ctrl_on(struct dp_ctrl *dp_ctrl)
 
 	if (ctrl->link->sink_request & DP_TEST_LINK_PHY_TEST_PATTERN)
 		dp_ctrl_send_phy_test_pattern(ctrl);
+	ctrl->power_on = true;
 
 	ctrl->power_on = true;
 	pr_debug("End-\n");
@@ -1462,7 +1463,6 @@ static void dp_ctrl_off(struct dp_ctrl *dp_ctrl)
 	wmb();
 
 	dp_ctrl_disable_mainlink_clocks(ctrl);
-
 	ctrl->power_on = false;
 	pr_debug("DP off done\n");
 }

@@ -2330,11 +2330,10 @@ static int sw49408_upgrade(struct device *dev)
 
 	ret = request_firmware(&fw, fwpath, dev);
 
-	if (ret < 0) {
+	if (ret) {
 		TOUCH_E("fail to request_firmware fwpath: %s (ret:%d)\n",
 			fwpath, ret);
-
-		return ret;
+		goto error;
 	}
 
 	TOUCH_I("fw size:%zu, data: %p\n", fw->size, fw->data);
@@ -2342,15 +2341,16 @@ static int sw49408_upgrade(struct device *dev)
 	if (sw49408_fw_compare(dev, fw)) {
 		ret = -EINVAL;
 		touch_msleep(200);
-		for (i = 0; i < 2 && ret; i++)
+		for (i = 0; i < 2 && ret < 0; i++)
 			ret = sw49408_fw_upgrade(dev, fw);
 	} else {
-		release_firmware(fw);
-		return -EPERM;
+		ret = -EPERM;
+		goto error;
 	}
 
+error:
 	release_firmware(fw);
-	return 0;
+	return ret;
 }
 
 static int sw49408_suspend(struct device *dev)
@@ -2892,7 +2892,7 @@ void sw49408_irq_runtime_engine_debug(struct device *dev)
 {
 	struct sw49408_data *d = to_sw49408_data(dev);
 
-	u8 ocd_debug[OCD_SIZE];
+	u8 ocd_debug[sizeof(d->info.debug)];
 	int a = 0;
 	int b = 0;
 	int start_point = 0;
@@ -3010,7 +3010,7 @@ static ssize_t store_reg_ctrl(struct device *dev,
 	struct touch_core_data *ts = to_touch_core(dev);
 	char command[6] = {0};
 	u32 reg = 0;
-	int value = 0;
+	u32 value = 0;
 	u32 data = 1;
 	u16 reg_addr;
 

@@ -125,7 +125,7 @@ static int send_midi_async(struct usb_line6 *line6, unsigned char *data,
 	}
 
 	usb_fill_int_urb(urb, line6->usbdev,
-			 usb_sndbulkpipe(line6->usbdev,
+			 usb_sndintpipe(line6->usbdev,
 					 line6->properties->ep_ctrl_w),
 			 transfer_buffer, length, midi_sent, line6,
 			 line6->interval);
@@ -225,13 +225,8 @@ static int snd_line6_new_midi(struct usb_line6 *line6,
 		return err;
 
 	rmidi = *rmidi_ret;
-#ifdef CONFIG_MACH_LGE
-	strncpy(rmidi->id, line6->properties->id, sizeof(rmidi->id) - 1);
-	strncpy(rmidi->name, line6->properties->name, sizeof(rmidi->name) - 1);
-#else
 	strcpy(rmidi->id, line6->properties->id);
 	strcpy(rmidi->name, line6->properties->name);
-#endif
 
 	rmidi->info_flags =
 	    SNDRV_RAWMIDI_INFO_OUTPUT |

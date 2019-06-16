@@ -135,21 +135,7 @@ static int ecryptfs_interpose(struct dentry *lower_dentry,
 	if (IS_ERR(inode))
 		return PTR_ERR(inode);
 	d_instantiate(dentry, inode);
-#ifdef CONFIG_SDP
-	if(S_ISDIR(inode->i_mode) && dentry) {
-		if(IS_SENSITIVE_DENTRY(dentry->d_parent)) {
-			/*
-			 * When parent directory is sensitive
-			 */
-			struct ecryptfs_crypt_stat *crypt_stat =
-					&ecryptfs_inode_to_private(inode)->crypt_stat;
 
-			SDP_LOGD("Parent %s is sensitive. so this directory is sensitive too\n",
-					dentry->d_parent->d_name.name);
-			crypt_stat->flags |= ECRYPTFS_SDP_SENSITIVE;
-		}
-	}
-#endif
 	return 0;
 }
 
@@ -322,8 +308,7 @@ ecryptfs_create(struct inode *directory_inode, struct dentry *ecryptfs_dentry,
 		iget_failed(ecryptfs_inode);
 		goto out;
 	}
-	unlock_new_inode(ecryptfs_inode);
-	d_instantiate(ecryptfs_dentry, ecryptfs_inode);
+	d_instantiate_new(ecryptfs_dentry, ecryptfs_inode);
 out:
 	return rc;
 }

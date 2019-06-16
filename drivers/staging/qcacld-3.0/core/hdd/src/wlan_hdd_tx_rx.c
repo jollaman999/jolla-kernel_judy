@@ -1,8 +1,5 @@
 /*
- * Copyright (c) 2012-2017 The Linux Foundation. All rights reserved.
- *
- * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
- *
+ * Copyright (c) 2012-2018 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -17,12 +14,6 @@
  * PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
  * TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
  * PERFORMANCE OF THIS SOFTWARE.
- */
-
-/*
- * This file was originally distributed by Qualcomm Atheros, Inc.
- * under proprietary terms before Copyright ownership was assigned
- * to the Linux Foundation.
  */
 
 /**
@@ -504,6 +495,309 @@ static void hdd_get_transmit_sta_id(hdd_adapter_t *adapter,
 			*station_id = sta_ctx->conn_info.staId[0];
 	}
 }
+
+/**
+ * hdd_clear_tx_rx_connectivity_stats() - clear connectivity stats
+ * @hdd_ctx: pointer to HDD Station Context
+ *
+ * Return: None
+ */
+static void hdd_clear_tx_rx_connectivity_stats(hdd_adapter_t *adapter)
+{
+	QDF_TRACE(QDF_MODULE_ID_HDD_DATA, QDF_TRACE_LEVEL_DEBUG,
+		"Clear txrx connectivity stats");
+	qdf_mem_zero(&adapter->hdd_stats.hdd_arp_stats,
+		     sizeof(adapter->hdd_stats.hdd_arp_stats));
+	qdf_mem_zero(&adapter->hdd_stats.hdd_dns_stats,
+		     sizeof(adapter->hdd_stats.hdd_dns_stats));
+	qdf_mem_zero(&adapter->hdd_stats.hdd_tcp_stats,
+		     sizeof(adapter->hdd_stats.hdd_tcp_stats));
+	qdf_mem_zero(&adapter->hdd_stats.hdd_icmpv4_stats,
+		     sizeof(adapter->hdd_stats.hdd_icmpv4_stats));
+	adapter->pkt_type_bitmap = 0;
+	adapter->track_arp_ip = 0;
+	qdf_mem_zero(adapter->dns_payload, adapter->track_dns_domain_len);
+	adapter->track_dns_domain_len = 0;
+	adapter->track_src_port = 0;
+	adapter->track_dest_port = 0;
+	adapter->track_dest_ipv4 = 0;
+}
+
+void hdd_reset_all_adapters_connectivity_stats(hdd_context_t *hdd_ctx)
+{
+	hdd_adapter_list_node_t *adapterNode = NULL, *pNext = NULL;
+	QDF_STATUS status;
+	hdd_adapter_t *adapter;
+
+	ENTER();
+
+	status = hdd_get_front_adapter(hdd_ctx, &adapterNode);
+
+	while (NULL != adapterNode && QDF_STATUS_SUCCESS == status) {
+		adapter = adapterNode->pAdapter;
+		hdd_clear_tx_rx_connectivity_stats(adapter);
+
+		status = hdd_get_next_adapter(hdd_ctx, adapterNode, &pNext);
+		adapterNode = pNext;
+	}
+
+	EXIT();
+
+}
+
+
+/**
+ * hdd_tx_rx_is_dns_domain_name_match() - function to check whether dns
+ * domain name in the received skb matches with the tracking dns domain
+ * name or not
+ *
+ * @skb: pointer to skb
+ * @adapter: pointer to adapter
+ *
+ * Returns: true if matches else false
+ */
+static bool hdd_tx_rx_is_dns_domain_name_match(struct sk_buff *skb,
+					       hdd_adapter_t *adapter)
+{
+	uint8_t *domain_name;
+
+	if (adapter->track_dns_domain_len == 0)
+		return false;
+
+	domain_name = qdf_nbuf_get_dns_domain_name(skb,
+						adapter->track_dns_domain_len);
+	if (strncmp(domain_name, adapter->dns_payload,
+		    adapter->track_dns_domain_len) == 0)
+		return true;
+	else
+		return false;
+}
+
+void hdd_tx_rx_collect_connectivity_stats_info(struct sk_buff *skb,
+			void *context,
+			enum connectivity_stats_pkt_status action,
+			uint8_t *pkt_type)
+{
+	uint32_t pkt_type_bitmap;
+	int errno;
+	hdd_adapter_t *adapter = NULL;
+
+	adapter = (hdd_adapter_t *)context;
+	errno = hdd_validate_adapter(adapter);
+	if (errno)
+		return;
+
+	/* ARP tracking is done already. */
+	pkt_type_bitmap = adapter->pkt_type_bitmap;
+	pkt_type_bitmap &= ~CONNECTIVITY_CHECK_SET_ARP;
+
+	if (!pkt_type_bitmap)
+		return;
+
+	switch (action) {
+	case PKT_TYPE_REQ:
+	case PKT_TYPE_TX_HOST_FW_SENT:
+		if (qdf_nbuf_is_icmp_pkt(skb)) {
+			if (qdf_nbuf_data_is_icmpv4_req(skb) &&
+			    (adapter->track_dest_ipv4 ==
+					qdf_nbuf_get_icmpv4_tgt_ip(skb))) {
+				*pkt_type = CONNECTIVITY_CHECK_SET_ICMPV4;
+				if (action == PKT_TYPE_REQ) {
+					++adapter->hdd_stats.hdd_icmpv4_stats.
+							tx_icmpv4_req_count;
+					QDF_TRACE(QDF_MODULE_ID_HDD_DATA,
+						  QDF_TRACE_LEVEL_INFO_HIGH,
+						  "%s : ICMPv4 Req packet", __func__);
+				} else
+					/* host receives tx completion */
+					++adapter->hdd_stats.hdd_icmpv4_stats.
+								tx_host_fw_sent;
+			}
+		} else if (qdf_nbuf_is_ipv4_tcp_pkt(skb)) {
+			if (qdf_nbuf_data_is_tcp_syn(skb) &&
+			    (adapter->track_dest_port ==
+					qdf_nbuf_data_get_tcp_dst_port(skb))) {
+				*pkt_type = CONNECTIVITY_CHECK_SET_TCP_SYN;
+				if (action == PKT_TYPE_REQ) {
+					++adapter->hdd_stats.hdd_tcp_stats.
+							tx_tcp_syn_count;
+					QDF_TRACE(QDF_MODULE_ID_HDD_DATA,
+						  QDF_TRACE_LEVEL_INFO_HIGH,
+						  "%s : TCP Syn packet", __func__);
+				} else
+					/* host receives tx completion */
+					++adapter->hdd_stats.hdd_tcp_stats.
+							tx_tcp_syn_host_fw_sent;
+			} else if ((adapter->hdd_stats.hdd_tcp_stats.
+				    is_tcp_syn_ack_rcv || adapter->hdd_stats.
+					hdd_tcp_stats.is_tcp_ack_sent) &&
+				   qdf_nbuf_data_is_tcp_ack(skb) &&
+				   (adapter->track_dest_port ==
+				    qdf_nbuf_data_get_tcp_dst_port(skb))) {
+				*pkt_type = CONNECTIVITY_CHECK_SET_TCP_ACK;
+				if (action == PKT_TYPE_REQ &&
+					adapter->hdd_stats.hdd_tcp_stats.
+							is_tcp_syn_ack_rcv) {
+					++adapter->hdd_stats.hdd_tcp_stats.
+							tx_tcp_ack_count;
+					adapter->hdd_stats.hdd_tcp_stats.
+						is_tcp_syn_ack_rcv = false;
+					adapter->hdd_stats.hdd_tcp_stats.
+						is_tcp_ack_sent = true;
+					QDF_TRACE(QDF_MODULE_ID_HDD_DATA,
+						  QDF_TRACE_LEVEL_INFO_HIGH,
+						  "%s : TCP Ack packet", __func__);
+				} else if (action == PKT_TYPE_TX_HOST_FW_SENT &&
+					adapter->hdd_stats.hdd_tcp_stats.
+							is_tcp_ack_sent) {
+				/* host receives tx completion */
+				++adapter->hdd_stats.hdd_tcp_stats.
+							tx_tcp_ack_host_fw_sent;
+				adapter->hdd_stats.hdd_tcp_stats.
+							is_tcp_ack_sent = false;
+				}
+			}
+		} else if (qdf_nbuf_is_ipv4_udp_pkt(skb)) {
+			if (qdf_nbuf_data_is_dns_query(skb) &&
+			    hdd_tx_rx_is_dns_domain_name_match(skb, adapter)) {
+				*pkt_type = CONNECTIVITY_CHECK_SET_DNS;
+				if (action == PKT_TYPE_REQ) {
+					++adapter->hdd_stats.hdd_dns_stats.
+							tx_dns_req_count;
+					QDF_TRACE(QDF_MODULE_ID_HDD_DATA,
+						  QDF_TRACE_LEVEL_INFO_HIGH,
+						  "%s : DNS query packet", __func__);
+				} else
+					/* host receives tx completion */
+					++adapter->hdd_stats.hdd_dns_stats.
+								tx_host_fw_sent;
+			}
+		}
+		break;
+
+	case PKT_TYPE_RSP:
+		if (qdf_nbuf_is_icmp_pkt(skb)) {
+			if (qdf_nbuf_data_is_icmpv4_rsp(skb) &&
+			    (adapter->track_dest_ipv4 ==
+					qdf_nbuf_get_icmpv4_src_ip(skb))) {
+				++adapter->hdd_stats.hdd_icmpv4_stats.
+							rx_icmpv4_rsp_count;
+				*pkt_type =
+				CONNECTIVITY_CHECK_SET_ICMPV4;
+				QDF_TRACE(QDF_MODULE_ID_HDD_DATA,
+					  QDF_TRACE_LEVEL_INFO_HIGH,
+					  "%s : ICMPv4 Res packet", __func__);
+			}
+		} else if (qdf_nbuf_is_ipv4_tcp_pkt(skb)) {
+			if (qdf_nbuf_data_is_tcp_syn_ack(skb) &&
+			    (adapter->track_dest_port ==
+					qdf_nbuf_data_get_tcp_src_port(skb))) {
+				++adapter->hdd_stats.hdd_tcp_stats.
+							rx_tcp_syn_ack_count;
+				adapter->hdd_stats.hdd_tcp_stats.
+					is_tcp_syn_ack_rcv = true;
+				*pkt_type =
+				CONNECTIVITY_CHECK_SET_TCP_SYN_ACK;
+				QDF_TRACE(QDF_MODULE_ID_HDD_DATA,
+					  QDF_TRACE_LEVEL_INFO_HIGH,
+					  "%s : TCP Syn ack packet", __func__);
+			}
+		} else if (qdf_nbuf_is_ipv4_udp_pkt(skb)) {
+			if (qdf_nbuf_data_is_dns_response(skb) &&
+			    hdd_tx_rx_is_dns_domain_name_match(skb, adapter)) {
+				++adapter->hdd_stats.hdd_dns_stats.
+							rx_dns_rsp_count;
+				*pkt_type = CONNECTIVITY_CHECK_SET_DNS;
+				QDF_TRACE(QDF_MODULE_ID_HDD_DATA,
+					  QDF_TRACE_LEVEL_INFO_HIGH,
+					  "%s : DNS response packet", __func__);
+			}
+		}
+		break;
+
+	case PKT_TYPE_TX_DROPPED:
+		switch (*pkt_type) {
+		case CONNECTIVITY_CHECK_SET_ICMPV4:
+			++adapter->hdd_stats.hdd_icmpv4_stats.tx_dropped;
+			QDF_TRACE(QDF_MODULE_ID_HDD_DATA,
+				  QDF_TRACE_LEVEL_INFO_HIGH,
+				  "%s : ICMPv4 Req packet dropped", __func__);
+			break;
+		case CONNECTIVITY_CHECK_SET_TCP_SYN:
+			++adapter->hdd_stats.hdd_tcp_stats.tx_tcp_syn_dropped;
+			QDF_TRACE(QDF_MODULE_ID_HDD_DATA,
+				  QDF_TRACE_LEVEL_INFO_HIGH,
+				  "%s : TCP syn packet dropped", __func__);
+			break;
+		case CONNECTIVITY_CHECK_SET_TCP_ACK:
+			++adapter->hdd_stats.hdd_tcp_stats.tx_tcp_ack_dropped;
+			QDF_TRACE(QDF_MODULE_ID_HDD_DATA,
+				  QDF_TRACE_LEVEL_INFO_HIGH,
+				  "%s : TCP ack packet dropped", __func__);
+			break;
+		case CONNECTIVITY_CHECK_SET_DNS:
+			++adapter->hdd_stats.hdd_dns_stats.tx_dropped;
+			QDF_TRACE(QDF_MODULE_ID_HDD_DATA,
+				  QDF_TRACE_LEVEL_INFO_HIGH,
+				  "%s : DNS query packet dropped", __func__);
+			break;
+		default:
+			break;
+		}
+		break;
+	case PKT_TYPE_RX_DELIVERED:
+		switch (*pkt_type) {
+		case CONNECTIVITY_CHECK_SET_ICMPV4:
+			++adapter->hdd_stats.hdd_icmpv4_stats.rx_delivered;
+			break;
+		case CONNECTIVITY_CHECK_SET_TCP_SYN_ACK:
+			++adapter->hdd_stats.hdd_tcp_stats.rx_delivered;
+			break;
+		case CONNECTIVITY_CHECK_SET_DNS:
+			++adapter->hdd_stats.hdd_dns_stats.rx_delivered;
+			break;
+		default:
+			break;
+		}
+		break;
+	case PKT_TYPE_RX_REFUSED:
+		switch (*pkt_type) {
+		case CONNECTIVITY_CHECK_SET_ICMPV4:
+			++adapter->hdd_stats.hdd_icmpv4_stats.rx_refused;
+			break;
+		case CONNECTIVITY_CHECK_SET_TCP_SYN_ACK:
+			++adapter->hdd_stats.hdd_tcp_stats.rx_refused;
+			break;
+		case CONNECTIVITY_CHECK_SET_DNS:
+			++adapter->hdd_stats.hdd_dns_stats.rx_refused;
+			break;
+		default:
+			break;
+		}
+		break;
+	case PKT_TYPE_TX_ACK_CNT:
+		switch (*pkt_type) {
+		case CONNECTIVITY_CHECK_SET_ICMPV4:
+			++adapter->hdd_stats.hdd_icmpv4_stats.tx_ack_cnt;
+			break;
+		case CONNECTIVITY_CHECK_SET_TCP_SYN:
+			++adapter->hdd_stats.hdd_tcp_stats.tx_tcp_syn_ack_cnt;
+			break;
+		case CONNECTIVITY_CHECK_SET_TCP_ACK:
+			++adapter->hdd_stats.hdd_tcp_stats.tx_tcp_ack_ack_cnt;
+			break;
+		case CONNECTIVITY_CHECK_SET_DNS:
+			++adapter->hdd_stats.hdd_dns_stats.tx_ack_cnt;
+			break;
+		default:
+			break;
+		}
+		break;
+	default:
+		break;
+	}
+}
+
 /**
  * hdd_is_tx_allowed() - check if Tx is allowed based on current peer state
  * @skb: pointer to OS packet (sk_buff)
@@ -522,7 +816,12 @@ static inline bool hdd_is_tx_allowed(struct sk_buff *skb, uint8_t peer_id)
 	void *pdev = cds_get_context(QDF_MODULE_ID_TXRX);
 	void *peer;
 
-	QDF_ASSERT(pdev);
+	if (qdf_unlikely(NULL == pdev)) {
+		QDF_TRACE(QDF_MODULE_ID_HDD_DATA, QDF_TRACE_LEVEL_ERROR,
+			  "%s: pdev is NULL", __func__);
+		QDF_ASSERT(pdev);
+		return false;
+	}
 	peer = ol_txrx_peer_find_by_local_id(pdev, peer_id);
 
 	if (peer == NULL) {
@@ -535,7 +834,8 @@ static inline bool hdd_is_tx_allowed(struct sk_buff *skb, uint8_t peer_id)
 	if (OL_TXRX_PEER_STATE_AUTH == peer_state)
 		return true;
 	else if (OL_TXRX_PEER_STATE_CONN == peer_state &&
-			ntohs(skb->protocol) == HDD_ETHERTYPE_802_1_X)
+			(ntohs(skb->protocol) == HDD_ETHERTYPE_802_1_X
+			|| IS_HDD_ETHERTYPE_WAI(skb)))
 		return true;
 	DPTRACE(qdf_dp_trace(skb, QDF_DP_TRACE_DROP_PACKET_RECORD,
 				(uint8_t *)skb->data,
@@ -557,7 +857,8 @@ static inline bool hdd_is_tx_allowed(struct sk_buff *skb, uint8_t peer_id)
  *
  * Return: Always returns NETDEV_TX_OK
  */
-static int __hdd_hard_start_xmit(struct sk_buff *skb, struct net_device *dev)
+static netdev_tx_t __hdd_hard_start_xmit(struct sk_buff *skb,
+					 struct net_device *dev)
 {
 	QDF_STATUS status;
 	sme_ac_enum_type ac;
@@ -565,12 +866,12 @@ static int __hdd_hard_start_xmit(struct sk_buff *skb, struct net_device *dev)
 	hdd_adapter_t *pAdapter = WLAN_HDD_GET_PRIV_PTR(dev);
 	bool granted;
 	uint8_t STAId;
-	hdd_context_t *hdd_ctx = WLAN_HDD_GET_CTX(pAdapter);
-	hdd_station_ctx_t *pHddStaCtx = &pAdapter->sessionCtx.station;
-	bool pkt_proto_logged = false;
 #ifdef QCA_PKT_PROTO_TRACE
-	uint8_t proto_type = 0;
-#endif /* QCA_PKT_PROTO_TRACE */
+	hdd_context_t *hdd_ctx = WLAN_HDD_GET_CTX(pAdapter);
+#endif
+	hdd_station_ctx_t *pHddStaCtx = &pAdapter->sessionCtx.station;
+
+	uint8_t pkt_type = 0;
 	bool is_arp = false;
 
 #ifdef QCA_WIFI_FTM
@@ -589,13 +890,17 @@ static int __hdd_hard_start_xmit(struct sk_buff *skb, struct net_device *dev)
 	if (QDF_NBUF_CB_GET_PACKET_TYPE(skb) == QDF_NBUF_CB_PACKET_TYPE_ARP) {
 		is_arp = true;
 		if (qdf_nbuf_data_is_arp_req(skb) &&
-		    (hdd_ctx->track_arp_ip == qdf_nbuf_get_arp_tgt_ip(skb))) {
+		    (pAdapter->track_arp_ip == qdf_nbuf_get_arp_tgt_ip(skb))) {
 			++pAdapter->hdd_stats.hdd_arp_stats.tx_arp_req_count;
 			QDF_TRACE(QDF_MODULE_ID_HDD_DATA,
 				  QDF_TRACE_LEVEL_INFO_HIGH,
 				  "%s : ARP packet", __func__);
 		}
 	}
+	/* track connectivity stats */
+	if (pAdapter->pkt_type_bitmap)
+		hdd_tx_rx_collect_connectivity_stats_info(skb, pAdapter,
+						PKT_TYPE_REQ, &pkt_type);
 
 	if (cds_is_driver_recovering() || cds_is_driver_in_bad_state()) {
 		QDF_TRACE(QDF_MODULE_ID_HDD_DATA, QDF_TRACE_LEVEL_INFO_HIGH,
@@ -706,19 +1011,6 @@ static int __hdd_hard_start_xmit(struct sk_buff *skb, struct net_device *dev)
 		skb->queue_mapping = hdd_linux_up_to_ac_map[up];
 	}
 
-#ifdef QCA_PKT_PROTO_TRACE
-	if ((hdd_ctx->config->gEnableDebugLog & CDS_PKT_TRAC_TYPE_EAPOL) ||
-	    (hdd_ctx->config->gEnableDebugLog & CDS_PKT_TRAC_TYPE_DHCP)) {
-		proto_type = cds_pkt_get_proto_type(skb,
-						    hdd_ctx->config->gEnableDebugLog,
-						    0);
-		if (CDS_PKT_TRAC_TYPE_EAPOL & proto_type)
-			cds_pkt_trace_buf_update("ST:T:EPL");
-		else if (CDS_PKT_TRAC_TYPE_DHCP & proto_type)
-			cds_pkt_trace_buf_update("ST:T:DHC");
-	}
-#endif /* QCA_PKT_PROTO_TRACE */
-
 	pAdapter->stats.tx_bytes += skb->len;
 
 	wlan_hdd_tdls_update_tx_pkt_cnt(pAdapter, skb);
@@ -729,8 +1021,6 @@ static int __hdd_hard_start_xmit(struct sk_buff *skb, struct net_device *dev)
 		++pAdapter->stats.tx_packets;
 
 	hdd_event_eapol_log(skb, QDF_TX);
-	pkt_proto_logged = qdf_dp_trace_log_pkt(pAdapter->sessionId,
-						skb, QDF_TX);
 	QDF_NBUF_CB_TX_PACKET_TRACK(skb) = QDF_NBUF_TX_PKT_DATA_TRACK;
 	QDF_NBUF_UPDATE_TX_PKT_COUNT(skb, QDF_NBUF_TX_PKT_HDD);
 
@@ -739,18 +1029,6 @@ static int __hdd_hard_start_xmit(struct sk_buff *skb, struct net_device *dev)
 	DPTRACE(qdf_dp_trace(skb, QDF_DP_TRACE_HDD_TX_PACKET_PTR_RECORD,
 			qdf_nbuf_data_addr(skb), sizeof(qdf_nbuf_data(skb)),
 			QDF_TX));
-	if (!pkt_proto_logged) {
-		DPTRACE(qdf_dp_trace(skb, QDF_DP_TRACE_HDD_TX_PACKET_RECORD,
-				(uint8_t *)skb->data,
-				qdf_nbuf_len(skb), QDF_TX));
-		if (qdf_nbuf_len(skb) > QDF_DP_TRACE_RECORD_SIZE) {
-			DPTRACE(qdf_dp_trace(skb,
-				QDF_DP_TRACE_HDD_TX_PACKET_RECORD,
-				(uint8_t *)&skb->data[QDF_DP_TRACE_RECORD_SIZE],
-				(qdf_nbuf_len(skb)-QDF_DP_TRACE_RECORD_SIZE),
-				QDF_TX));
-		}
-	}
 
 	/* Check if station is connected */
 	if (OL_TXRX_PEER_STATE_CONN ==
@@ -762,8 +1040,11 @@ static int __hdd_hard_start_xmit(struct sk_buff *skb, struct net_device *dev)
 		++pAdapter->hdd_stats.hddTxRxStats.txXmitDroppedAC[ac];
 		goto drop_pkt_and_release_skb;
 	}
-
 	if (!hdd_is_tx_allowed(skb, STAId)) {
+		QDF_TRACE(QDF_MODULE_ID_HDD_DATA,
+			  QDF_TRACE_LEVEL_INFO_HIGH,
+			  "%s: Tx is not allowed. drop the pkt",
+			  __func__);
 		++pAdapter->hdd_stats.hddTxRxStats.txXmitDroppedAC[ac];
 		goto drop_pkt_and_release_skb;
 	}
@@ -790,7 +1071,7 @@ static int __hdd_hard_start_xmit(struct sk_buff *skb, struct net_device *dev)
 	}
 
 	if (pAdapter->tx_fn(ol_txrx_get_vdev_by_sta_id(STAId),
-		 (qdf_nbuf_t) skb) != NULL) {
+		 (qdf_nbuf_t)skb, 0) != NULL) {
 		QDF_TRACE(QDF_MODULE_ID_HDD_DATA, QDF_TRACE_LEVEL_INFO_HIGH,
 			  "%s: Failed to send packet to txrx for staid: %d",
 			  __func__, STAId);
@@ -807,16 +1088,15 @@ drop_pkt_and_release_skb:
 drop_pkt:
 
 	if (skb) {
-		DPTRACE(qdf_dp_trace(skb, QDF_DP_TRACE_DROP_PACKET_RECORD,
-			(uint8_t *)skb->data, qdf_nbuf_len(skb), QDF_TX));
-		if (qdf_nbuf_len(skb) > QDF_DP_TRACE_RECORD_SIZE)
-			DPTRACE(qdf_dp_trace(skb,
-				 QDF_DP_TRACE_DROP_PACKET_RECORD,
-				(uint8_t *)&skb->data[QDF_DP_TRACE_RECORD_SIZE],
-				(qdf_nbuf_len(skb)-QDF_DP_TRACE_RECORD_SIZE),
-				 QDF_TX));
+		/* track connectivity stats */
+		if (pAdapter->pkt_type_bitmap)
+			hdd_tx_rx_collect_connectivity_stats_info(skb, pAdapter,
+						PKT_TYPE_TX_DROPPED, &pkt_type);
 
+		qdf_dp_trace_data_pkt(skb, QDF_DP_TRACE_DROP_PACKET_RECORD, 0,
+				      QDF_TX);
 		kfree_skb(skb);
+		skb = NULL;
 	}
 
 drop_pkt_accounting:
@@ -842,9 +1122,9 @@ drop_pkt_accounting:
  *
  * Return: Always returns NETDEV_TX_OK
  */
-int hdd_hard_start_xmit(struct sk_buff *skb, struct net_device *dev)
+netdev_tx_t hdd_hard_start_xmit(struct sk_buff *skb, struct net_device *dev)
 {
-	int ret;
+	netdev_tx_t ret;
 
 	cds_ssr_protect(__func__);
 	ret = __hdd_hard_start_xmit(skb, dev);
@@ -1173,10 +1453,10 @@ static bool hdd_is_duplicate_ip_arp(struct sk_buff *skb)
 	if (NULL == skb)
 		return false;
 
-	arp_ip = hdd_get_arp_src_ip(skb);
-
 	if (!skb->dev)
 		return false;
+
+	arp_ip = hdd_get_arp_src_ip(skb);
 
 	in_dev = __in_dev_get_rtnl(skb->dev);
 	if (in_dev) {
@@ -1402,7 +1682,7 @@ static inline void hdd_register_rx_ol(void)
 
 	hdd_ctx->tcp_delack_on = 0;
 
-	if (hdd_ctx->ol_enable == CFG_LRO_ENABLED) {
+	if (!hdd_is_lro_enabled(hdd_ctx)) {
 		hdd_ctx->receive_offload_cb = hdd_lro_rx;
 		/* Register the flush callback */
 		hdd_lro_create();
@@ -1451,6 +1731,10 @@ void hdd_gro_destroy(void)
 }
 #else /* HELIUMPLUS */
 static inline void hdd_register_rx_ol(void) { }
+
+void hdd_gro_destroy(void)
+{
+}
 #endif
 
 /**
@@ -1597,7 +1881,7 @@ QDF_STATUS hdd_rx_packet_cbk(void *context, qdf_nbuf_t rxBuf)
 	bool wake_lock = false;
 	bool is_arp = false;
 	bool track_arp = false;
-	bool proto_pkt_logged = false;
+	uint8_t pkt_type = 0;
 
 	/* Sanity check on inputs */
 	if (unlikely((NULL == context) || (NULL == rxBuf))) {
@@ -1628,13 +1912,18 @@ QDF_STATUS hdd_rx_packet_cbk(void *context, qdf_nbuf_t rxBuf)
 	if (QDF_NBUF_CB_PACKET_TYPE_ARP == QDF_NBUF_CB_GET_PACKET_TYPE(skb)) {
 		is_arp = true;
 		if (qdf_nbuf_data_is_arp_rsp(skb) &&
-		    (pHddCtx->track_arp_ip == qdf_nbuf_get_arp_src_ip(skb))) {
+		    (pAdapter->track_arp_ip == qdf_nbuf_get_arp_src_ip(skb))) {
 			++pAdapter->hdd_stats.hdd_arp_stats.rx_arp_rsp_count;
 			QDF_TRACE(QDF_MODULE_ID_HDD_DATA, QDF_TRACE_LEVEL_DEBUG,
 					"%s: ARP packet received", __func__);
 			track_arp = true;
 		}
 	}
+
+	/* track connectivity stats */
+	if (pAdapter->pkt_type_bitmap)
+		hdd_tx_rx_collect_connectivity_stats_info(skb, pAdapter,
+						PKT_TYPE_RSP, &pkt_type);
 
 	pHddStaCtx = WLAN_HDD_GET_STATION_CTX_PTR(pAdapter);
 	if ((pHddStaCtx->conn_info.proxyARPService) &&
@@ -1656,22 +1945,14 @@ QDF_STATUS hdd_rx_packet_cbk(void *context, qdf_nbuf_t rxBuf)
 	}
 
 	hdd_event_eapol_log(skb, QDF_RX);
-	proto_pkt_logged = qdf_dp_trace_log_pkt(pAdapter->sessionId,
-						skb, QDF_RX);
+	qdf_dp_trace_log_pkt(pAdapter->sessionId, skb, QDF_RX);
 	DPTRACE(qdf_dp_trace(skb,
 		QDF_DP_TRACE_RX_HDD_PACKET_PTR_RECORD,
 		qdf_nbuf_data_addr(skb),
 		sizeof(qdf_nbuf_data(skb)), QDF_RX));
-	if (!proto_pkt_logged) {
-		DPTRACE(qdf_dp_trace(skb, QDF_DP_TRACE_HDD_RX_PACKET_RECORD,
-			(uint8_t *)skb->data, qdf_nbuf_len(skb), QDF_RX));
-		if (qdf_nbuf_len(skb) > QDF_DP_TRACE_RECORD_SIZE)
-			DPTRACE(qdf_dp_trace(skb,
-				QDF_DP_TRACE_HDD_RX_PACKET_RECORD,
-				(uint8_t *)&skb->data[QDF_DP_TRACE_RECORD_SIZE],
-				(qdf_nbuf_len(skb)-QDF_DP_TRACE_RECORD_SIZE),
-				QDF_RX));
-	}
+
+	DPTRACE(qdf_dp_trace_data_pkt(skb, QDF_DP_TRACE_RX_PACKET_RECORD,
+				      0, QDF_RX));
 
 	wlan_hdd_tdls_update_rx_pkt_cnt(pAdapter, skb);
 
@@ -1734,12 +2015,21 @@ QDF_STATUS hdd_rx_packet_cbk(void *context, qdf_nbuf_t rxBuf)
 		if (track_arp)
 			++pAdapter->hdd_stats.hdd_arp_stats.
 					rx_delivered;
+		/* track connectivity stats */
+		if (pAdapter->pkt_type_bitmap)
+			hdd_tx_rx_collect_connectivity_stats_info(skb, pAdapter,
+					PKT_TYPE_RX_DELIVERED, &pkt_type);
 	} else {
 		++pAdapter->hdd_stats.hddTxRxStats.
 			rxRefused[cpu_index];
 		if (track_arp)
 			++pAdapter->hdd_stats.hdd_arp_stats.
 					rx_refused;
+		/* track connectivity stats */
+		if (pAdapter->pkt_type_bitmap)
+			hdd_tx_rx_collect_connectivity_stats_info(
+						skb, pAdapter,
+						PKT_TYPE_RX_REFUSED, &pkt_type);
 	}
 
 	return QDF_STATUS_SUCCESS;

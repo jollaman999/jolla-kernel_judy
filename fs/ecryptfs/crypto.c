@@ -38,45 +38,8 @@
 #include <asm/unaligned.h>
 #include "ecryptfs_kernel.h"
 
-#ifdef CONFIG_CRYPTO_CCMODE
-#include <linux/cc_mode.h>
-#include <crypto/rng.h>
-#endif /* CONFIG_CRYPTO_CCMODE */
 #define DECRYPT		0
 #define ENCRYPT		1
-
-#ifdef CONFIG_CRYPTO_CCMODE
-#define SEED_LEN 48
-
-/**
- * crypto_fips_rng_get_bytes
- * @data: Buffer to get random bytes
- * @len: the lengh of random bytes
- */
-static int crypto_sec_rng_get_bytes(u8 *data, unsigned int len)
-{
-	static struct crypto_rng *crypto_sec_rng = NULL;
-	struct crypto_rng *rng;
-	int err = 0;
-
-	if (!crypto_sec_rng) {
-		rng = crypto_alloc_rng("qrng", 0, 0);
-		err = PTR_ERR(rng);
-		if (IS_ERR(rng))
-			goto out;
-		crypto_sec_rng = rng;
-	}
-	err = crypto_rng_get_bytes(crypto_sec_rng, data, len);
-
-	if (err) {
-		ecryptfs_printk(KERN_ERR, "Error getting random bytes in SEC mode (err=%d)\n", err);
-		ecryptfs_printk(KERN_ERR, " [CCAudit] Error getting random bytes in SEC mode (err=%d)\n", err);
-	}
-out:
-	return err;
-
-}
-#endif /* CONFIG_CRYPTO_CCMODE */
 
 /**
  * ecryptfs_to_hex
@@ -191,12 +154,11 @@ int ecryptfs_derive_iv(char *iv, struct ecryptfs_crypt_stat *crypt_stat,
 		       loff_t offset)
 {
 	int rc = 0;
-#ifdef CONFIG_CRYPTO_CCMODE
-	int cc_flag;
+#ifdef CONFIG_SD_ENCRYPTION_ADVANCED
 	char dst[SHA256_HASH_SIZE];
 #else
 	char dst[MD5_DIGEST_SIZE];
-#endif /* CONFIG_CRYPTO_CCMODE */
+#endif //CONFIG_SD_ENCRYPTION_ADVANCED
 	char src[ECRYPTFS_MAX_IV_BYTES + 16];
 
 	if (unlikely(ecryptfs_verbosity > 0)) {
@@ -221,15 +183,7 @@ int ecryptfs_derive_iv(char *iv, struct ecryptfs_crypt_stat *crypt_stat,
 				"MD5 while generating IV for a page\n");
 		goto out;
 	}
-#ifdef CONFIG_CRYPTO_CCMODE
-	cc_flag = get_cc_mode_state();
-	if ((cc_flag & FLAG_CC_MODE) == FLAG_CC_MODE)
-		memcpy(iv, dst + 16, crypt_stat->iv_bytes);
-	else
-		memcpy(iv, dst, crypt_stat->iv_bytes);
-#else
 	memcpy(iv, dst, crypt_stat->iv_bytes);
-#endif /* CONFIG_CRYPTO_CCMODE */
 	if (unlikely(ecryptfs_verbosity > 0)) {
 		ecryptfs_printk(KERN_DEBUG, "derived iv:\n");
 		ecryptfs_dump_hex(iv, crypt_stat->iv_bytes);
@@ -249,7 +203,7 @@ int ecryptfs_init_crypt_stat(struct ecryptfs_crypt_stat *crypt_stat)
 	struct crypto_shash *tfm;
 	int rc;
 
-#ifdef CONFIG_CRYPTO_CCMODE
+#ifdef CONFIG_SD_ENCRYPTION_ADVANCED
 	tfm = crypto_alloc_shash(ECRYPTFS_SHA256_HASH, 0, 0);
 #else
 	tfm = crypto_alloc_shash(ECRYPTFS_DEFAULT_HASH, 0, 0);
@@ -730,12 +684,11 @@ void ecryptfs_set_default_sizes(struct ecryptfs_crypt_stat *crypt_stat)
 int ecryptfs_compute_root_iv(struct ecryptfs_crypt_stat *crypt_stat)
 {
 	int rc = 0;
-#ifdef CONFIG_CRYPTO_CCMODE
-	int cc_flag;
+#ifdef CONFIG_SD_ENCRYPTION_ADVANCED
 	char dst[SHA256_HASH_SIZE];
 #else
 	char dst[MD5_DIGEST_SIZE];
-#endif /* CONFIG_CRYPTO_CCMODE */
+#endif //CONFIG_SD_ENCRYPTION_ADVANCED
 	BUG_ON(crypt_stat->iv_bytes > MD5_DIGEST_SIZE);
 	BUG_ON(crypt_stat->iv_bytes <= 0);
 	if (!(crypt_stat->flags & ECRYPTFS_KEY_VALID)) {
@@ -752,16 +705,7 @@ int ecryptfs_compute_root_iv(struct ecryptfs_crypt_stat *crypt_stat)
 		goto out;
 	}
 
-#ifdef CONFIG_CRYPTO_CCMODE
-	cc_flag = get_cc_mode_state();
-	if ((cc_flag & FLAG_CC_MODE) == FLAG_CC_MODE) {
-		memcpy(crypt_stat->root_iv, dst + 16, crypt_stat->iv_bytes);
-	}
-	else
-		memcpy(crypt_stat->root_iv, dst, crypt_stat->iv_bytes);
-#else
 	memcpy(crypt_stat->root_iv, dst, crypt_stat->iv_bytes);
-#endif /* CONFIG_CRYPTO_CCMODE */
 out:
 	if (rc) {
 		memset(crypt_stat->root_iv, 0, crypt_stat->iv_bytes);
@@ -772,11 +716,7 @@ out:
 
 static void ecryptfs_generate_new_key(struct ecryptfs_crypt_stat *crypt_stat)
 {
-#ifdef CONFIG_CRYPTO_CCMODE
-	crypto_sec_rng_get_bytes(crypt_stat->key, crypt_stat->key_size);
-#else
 	get_random_bytes(crypt_stat->key, crypt_stat->key_size);
-#endif /* CONFIG_CRYPTO_CCMODE */
 	crypt_stat->flags |= ECRYPTFS_KEY_VALID;
 	ecryptfs_compute_root_iv(crypt_stat);
 	if (unlikely(ecryptfs_verbosity > 0)) {
@@ -785,17 +725,6 @@ static void ecryptfs_generate_new_key(struct ecryptfs_crypt_stat *crypt_stat)
 				  crypt_stat->key_size);
 	}
 }
-
-#ifdef CONFIG_ECRYPT_FS_KEY_ENCRYPTION_GCM
-static void ecryptfs_generate_new_gcm_iv(struct ecryptfs_crypt_stat *crypt_stat)
-{
-	crypto_sec_rng_get_bytes(crypt_stat->gcm_iv, ECRYPTFS_DEFAULT_IV_BYTES);
-	if (unlikely(ecryptfs_verbosity > 0)) {
-		ecryptfs_printk(KERN_DEBUG, "Generated new GCM IV:\n");
-		ecryptfs_dump_hex(crypt_stat->gcm_iv, ECRYPTFS_DEFAULT_IV_BYTES);
-	}
-}
-#endif
 
 /**
  * ecryptfs_copy_mount_wide_flags_to_inode_flags
@@ -822,11 +751,6 @@ static void ecryptfs_copy_mount_wide_flags_to_inode_flags(
 			 & ECRYPTFS_GLOBAL_ENCFN_USE_FEK)
 			crypt_stat->flags |= ECRYPTFS_ENCFN_USE_FEK;
 	}
-#ifdef CONFIG_SDP
-	if (mount_crypt_stat->flags & ECRYPTFS_SDP_MOUNT) {
-		crypt_stat->flags |= ECRYPTFS_SDP_ENABLED;
-	}
-#endif //CONFIG_SDP
 }
 
 static int ecryptfs_copy_mount_wide_sigs_to_inode_sigs(
@@ -876,9 +800,6 @@ static void ecryptfs_set_default_crypt_stat_vals(
 	crypt_stat->flags &= ~(ECRYPTFS_KEY_VALID);
 	crypt_stat->file_version = ECRYPTFS_FILE_VERSION;
 	crypt_stat->mount_crypt_stat = mount_crypt_stat;
-#ifdef CONFIG_SDP
-	crypt_stat->storage_id = -1;
-#endif
 }
 
 /**
@@ -909,9 +830,6 @@ int ecryptfs_new_file_context(struct inode *ecryptfs_inode)
 		    ecryptfs_inode->i_sb)->mount_crypt_stat;
 	int cipher_name_len;
 	int rc = 0;
-#ifdef CONFIG_ECRYPT_FS_KEY_ENCRYPTION_GCM
-	int cc_flag;
-#endif
 
 	ecryptfs_set_default_crypt_stat_vals(crypt_stat, mount_crypt_stat);
 	crypt_stat->flags |= (ECRYPTFS_ENCRYPTED | ECRYPTFS_KEY_VALID);
@@ -933,12 +851,6 @@ int ecryptfs_new_file_context(struct inode *ecryptfs_inode)
 	crypt_stat->key_size =
 		mount_crypt_stat->global_default_cipher_key_size;
 	ecryptfs_generate_new_key(crypt_stat);
-#ifdef CONFIG_ECRYPT_FS_KEY_ENCRYPTION_GCM
-	cc_flag = get_cc_mode_state();
-	if ((cc_flag & FLAG_CC_MODE) == FLAG_CC_MODE) {
-		ecryptfs_generate_new_gcm_iv(crypt_stat);
-	}
-#endif
 
 	rc = ecryptfs_init_crypt_ctx(crypt_stat);
 	if (rc)
@@ -981,13 +893,7 @@ static struct ecryptfs_flag_map_elem ecryptfs_flag_map[] = {
 	{0x00000001, ECRYPTFS_ENABLE_HMAC},
 	{0x00000002, ECRYPTFS_ENCRYPTED},
 	{0x00000004, ECRYPTFS_METADATA_IN_XATTR},
-#ifdef CONFIG_SDP
-	{0x00000008, ECRYPTFS_ENCRYPT_FILENAMES},
-	{0x00100000, ECRYPTFS_SDP_ENABLED},
-	{0x00200000, ECRYPTFS_SDP_SENSITIVE},
-#else
 	{0x00000008, ECRYPTFS_ENCRYPT_FILENAMES}
-#endif
 };
 
 /**
@@ -1028,11 +934,7 @@ static int ecryptfs_process_flags(struct ecryptfs_crypt_stat *crypt_stat,
 static void write_ecryptfs_marker(char *page_virt, size_t *written)
 {
 	u32 m_1, m_2;
-#ifdef CONFIG_CRYPTO_CCMODE
-	crypto_sec_rng_get_bytes((unsigned char*)&m_1, (MAGIC_ECRYPTFS_MARKER_SIZE_BYTES / 2));
-#else
 	get_random_bytes(&m_1, (MAGIC_ECRYPTFS_MARKER_SIZE_BYTES / 2));
-#endif /* CONFIG_CRYPTO_CCMODE */
 	m_2 = (m_1 ^ MAGIC_ECRYPTFS_MARKER);
 	put_unaligned_be32(m_1, page_virt);
 	page_virt += (MAGIC_ECRYPTFS_MARKER_SIZE_BYTES / 2);
@@ -1555,13 +1457,6 @@ int ecryptfs_read_metadata(struct dentry *ecryptfs_dentry)
 		rc = ecryptfs_read_headers_virt(page_virt, crypt_stat,
 						ecryptfs_dentry,
 						ECRYPTFS_VALIDATE_HEADER_SIZE);
-#ifdef CONFIG_SDP
-	if (rc && crypt_stat->flags & ECRYPTFS_SDP_SENSITIVE) {
-		SDP_LOGE(" [CCAudit] %s: SDP meata data is not saved into xattr\n",
-		       __func__);
-		goto out;
-	}
-#endif
 	if (rc) {
 		/* metadata is not in the file header, so try xattrs */
 		memset(page_virt, 0, PAGE_SIZE);
@@ -1718,13 +1613,13 @@ ecryptfs_process_key_cipher(struct crypto_skcipher **key_tfm,
 		      "allowable is [%d]\n", *key_size, ECRYPTFS_MAX_KEY_BYTES);
 		goto out;
 	}
-#ifdef CONFIG_CRYPTO_CCMODE
+#ifdef CONFIG_SD_ENCRYPTION_ADVANCED
 	rc = ecryptfs_crypto_api_algify_cipher_name(&full_alg_name, cipher_name,
 						    "cbc");
 #else
 	rc = ecryptfs_crypto_api_algify_cipher_name(&full_alg_name, cipher_name,
 						    "ecb");
-#endif /* CONFIG_CRYPTO_CCMODE */
+#endif //CONFIG_SD_ENCRYPTION_ADVANCED
 	if (rc)
 		goto out;
 	*key_tfm = crypto_alloc_skcipher(full_alg_name, 0, CRYPTO_ALG_ASYNC);
@@ -1737,11 +1632,7 @@ ecryptfs_process_key_cipher(struct crypto_skcipher **key_tfm,
 	crypto_skcipher_set_flags(*key_tfm, CRYPTO_TFM_REQ_WEAK_KEY);
 	if (*key_size == 0)
 		*key_size = crypto_skcipher_default_keysize(*key_tfm);
-#ifdef CONFIG_CRYPTO_CCMODE
-	crypto_sec_rng_get_bytes(dummy_key, *key_size);
-#else
 	get_random_bytes(dummy_key, *key_size);
-#endif /* CONFIG_CRYPTO_CCMODE */
 	rc = crypto_skcipher_setkey(*key_tfm, dummy_key, *key_size);
 	if (rc) {
 		ecryptfs_printk(KERN_ERR, "Error attempting to set key of size [%zd] for "

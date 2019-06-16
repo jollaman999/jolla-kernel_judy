@@ -30,14 +30,11 @@ config SD_ENCRYPTION_MANAGER
 	  file system (eCryptfs) before committing it to SD card and all reads
 	  automatically decrypt data before returning it to the calling process.
 
-config ECRYPT_FS_KEY_ENCRYPTION_GCM
-	bool "LG provides AES-GCM for KEK(Key Encryption Key) for each file"
-	depends on CRYPTO_CCMODE
-	select CRYPTO_GCM
-	default n
-
-config SDP
-	bool "Enable Sensitive data protection"
-	depends on ECRYPT_FS_MESSAGING
+config SD_ENCRYPTION_ADVANCED
+	bool "Switch to advanced algorithm for LG SDCard encryption"
+	depends on SD_ENCRYPTION_MANAGER
+	default y
 	help
-	  LG provides Sensitive Data Protection
+	  Switches hash algorithm from MD5 to SHA256 to strengthen security
+	  when making initial vector for AES(CBC). And switches block encryption
+	  algorithm from ecb to cbc when encrypting file encryption key.

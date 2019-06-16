@@ -1,4 +1,4 @@
-/* Copyright (c) 2013-2017, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2013-2018, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -985,6 +985,112 @@ static int ufsdbg_dump_geo_desc_show(struct seq_file *file, void *data)
 	return err;
 }
 
+#include <asm/unaligned.h>
+static void ufsdbg_dump_en_health_report(struct seq_file *file, void *data) {
+
+	/* Toshiba : Enhanced Device Health for Next UFS Memory - version 1.1 */
+	#define UFS_VENDOR_TOSHIBA     0x198
+	struct ufs_hba *hba = (struct ufs_hba *)file->private;
+
+	if ((!hba->sdev_ufs_device->skip_vpd_pages) &&
+		(hba->dev_info.w_manufacturer_id == UFS_VENDOR_TOSHIBA)) {
+
+		#define EN_HEALTH_VPD_SIZE 512
+		#define EN_HEALTH_VPD_PAGECODE 0xC0
+		#define EN_HEALTH_VPD_PASSCODE 0x1A
+		u8 *en_health_buf = 0;
+		int err = 0, i;
+		struct desc_field_offset *tmp;
+		unsigned char cmd[16];
+
+		struct desc_field_offset en_health_desc_field_name[] = {
+			{"bPeriphQualifier",		0x00, BYTE},
+			{"bPageCode",				0x01, BYTE},
+			{"bPageLength",				0x02, WORD},
+			{"bMaxEraseCnt_pSLC",		0x04, DWORD},
+			{"bMinEraseCnt_pSLC",		0x08, DWORD},
+			{"bAvgEraseCnt_pSLC",		0x0C, DWORD},
+			{"bMaxEraseCnt_MLC",		0x10, DWORD},
+			{"bMinEraseCnt_MLC",		0x14, DWORD},
+			{"bAvgEraseCnt_MLC",		0x18, DWORD},
+			{"bReadRefreshCnt",			0x1C, DWORD},
+			{"bReserved",				0x20, DWORD},
+			{"bRuntimeBadBlockCnt",		0x24, DWORD},
+			{"bReserved",				0x28, DWORD},
+			{"bCumulativeInitCnt",		0x2C, DWORD},
+			{"bCumulativeWrittenDataSize_100MB",	0x30, DWORD},
+			{"bPatchTrialCnt",			0x34, DWORD},
+			{"bPatchSuccessCnt",		0x38, DWORD},
+			{"bPatchReleaseDate",		0x3C, DWORD},
+			{"bCumulativeReadDataSize_100MB",		0x40, LONG},
+			{"bReserved",				0x48, DWORD},
+			{"bUECCCnt",				0x4C, DWORD},
+			{"bReserved",				0x50, LONG},
+			{"bSuddenPowerdownCnt",		0x58, DWORD},
+			{"bReserved",				0x5C, BYTE},
+		};
+
+		en_health_buf = kzalloc(EN_HEALTH_VPD_SIZE, GFP_KERNEL);
+		if (!en_health_buf)
+			return;
+
+		/* referencing scsi_vpd_inquiry() */
+		cmd[0] = INQUIRY;
+		cmd[1] = 1;		/* EVPD */
+		cmd[1] |= (EN_HEALTH_VPD_PASSCODE << 2); /* fill in the reserved aread of cmd[1] */
+		cmd[2] = EN_HEALTH_VPD_PAGECODE;
+		cmd[3] = EN_HEALTH_VPD_SIZE >> 8;
+		cmd[4] = EN_HEALTH_VPD_SIZE & 0xff;
+		cmd[5] = 0;		/* Control byte */
+
+		/*
+		 * I'm not convinced we need to try quite this hard to get VPD, but
+		 * all the existing users tried this hard.
+		 */
+		err = scsi_execute_req(hba->sdev_ufs_device, cmd, DMA_FROM_DEVICE, en_health_buf,
+					  EN_HEALTH_VPD_SIZE, NULL, 30 * HZ, 3, NULL);
+		if (err)
+			goto out_free;
+
+		/* Sanity check that we got the page back that we asked for */
+		if (en_health_buf[1] != EN_HEALTH_VPD_PAGECODE)
+			goto out_free;
+
+		if (!err) {
+			seq_printf(file,
+				"= = = = = = = = = = = = = = = = = = = = = = = = = = = = = =\n");
+
+			for (i = 0; i < ARRAY_SIZE(en_health_desc_field_name); ++i) {
+				u64 val = 0;
+				tmp = &en_health_desc_field_name[i];
+				switch (tmp->width_byte) {
+					case BYTE:
+						val = (u8)en_health_buf[tmp->offset];
+						break;
+					case WORD:
+						val = (u16)get_unaligned_be16(&en_health_buf[tmp->offset]);
+						break;
+					case DWORD:
+						val = (u32)get_unaligned_be32(&en_health_buf[tmp->offset]);
+						break;
+					case LONG:
+						val = (u64)get_unaligned_be64(&en_health_buf[tmp->offset]);
+						break;
+				}
+
+				seq_printf(file,
+					"Enhanced HEALTH DESCRIPTOR Descriptor[Byte offset 0x%02x]: %s = 0x%llx\n",
+					tmp->offset,
+					tmp->name,
+					val);
+			}
+		}
+out_free:
+		if (en_health_buf)
+			kfree(en_health_buf);
+	}
+}
+
 static int ufsdbg_dump_health_desc_show(struct seq_file *file, void *data)
 {
 	int err = 0, i;
@@ -1018,6 +1124,8 @@ static int ufsdbg_dump_health_desc_show(struct seq_file *file, void *data)
 		seq_printf(file, "HEALTH DESCRIPTOR Descriptor failed. err = %d\n",
 				err);
 	}
+
+	ufsdbg_dump_en_health_report(file, data);
 
 	return err;
 }
@@ -1406,6 +1514,49 @@ static int ufsdbg_show_hba_show(struct seq_file *file, void *data)
 			hba->ufs_stats.power_mode_change_cnt);
 	seq_printf(file, "hibern8_exit_cnt = %d\n",
 			hba->ufs_stats.hibern8_exit_cnt);
+
+	seq_printf(file, "pa_err_cnt_total = %d\n",
+			hba->ufs_stats.pa_err_cnt_total);
+	seq_printf(file, "pa_lane_0_err_cnt = %d\n",
+			hba->ufs_stats.pa_err_cnt[UFS_EC_PA_LANE_0]);
+	seq_printf(file, "pa_lane_1_err_cnt = %d\n",
+			hba->ufs_stats.pa_err_cnt[UFS_EC_PA_LANE_1]);
+	seq_printf(file, "pa_line_reset_err_cnt = %d\n",
+			hba->ufs_stats.pa_err_cnt[UFS_EC_PA_LINE_RESET]);
+	seq_printf(file, "dl_err_cnt_total = %d\n",
+			hba->ufs_stats.dl_err_cnt_total);
+	seq_printf(file, "dl_nac_received_err_cnt = %d\n",
+			hba->ufs_stats.dl_err_cnt[UFS_EC_DL_NAC_RECEIVED]);
+	seq_printf(file, "dl_tcx_replay_timer_expired_err_cnt = %d\n",
+	hba->ufs_stats.dl_err_cnt[UFS_EC_DL_TCx_REPLAY_TIMER_EXPIRED]);
+	seq_printf(file, "dl_afcx_request_timer_expired_err_cnt = %d\n",
+	hba->ufs_stats.dl_err_cnt[UFS_EC_DL_AFCx_REQUEST_TIMER_EXPIRED]);
+	seq_printf(file, "dl_fcx_protection_timer_expired_err_cnt = %d\n",
+	hba->ufs_stats.dl_err_cnt[UFS_EC_DL_FCx_PROTECT_TIMER_EXPIRED]);
+	seq_printf(file, "dl_crc_err_cnt = %d\n",
+			hba->ufs_stats.dl_err_cnt[UFS_EC_DL_CRC_ERROR]);
+	seq_printf(file, "dll_rx_buffer_overflow_err_cnt = %d\n",
+		   hba->ufs_stats.dl_err_cnt[UFS_EC_DL_RX_BUFFER_OVERFLOW]);
+	seq_printf(file, "dl_max_frame_length_exceeded_err_cnt = %d\n",
+		hba->ufs_stats.dl_err_cnt[UFS_EC_DL_MAX_FRAME_LENGTH_EXCEEDED]);
+	seq_printf(file, "dl_wrong_sequence_number_err_cnt = %d\n",
+		   hba->ufs_stats.dl_err_cnt[UFS_EC_DL_WRONG_SEQUENCE_NUMBER]);
+	seq_printf(file, "dl_afc_frame_syntax_err_cnt = %d\n",
+		   hba->ufs_stats.dl_err_cnt[UFS_EC_DL_AFC_FRAME_SYNTAX_ERROR]);
+	seq_printf(file, "dl_nac_frame_syntax_err_cnt = %d\n",
+		   hba->ufs_stats.dl_err_cnt[UFS_EC_DL_NAC_FRAME_SYNTAX_ERROR]);
+	seq_printf(file, "dl_eof_syntax_err_cnt = %d\n",
+		   hba->ufs_stats.dl_err_cnt[UFS_EC_DL_EOF_SYNTAX_ERROR]);
+	seq_printf(file, "dl_frame_syntax_err_cnt = %d\n",
+		   hba->ufs_stats.dl_err_cnt[UFS_EC_DL_FRAME_SYNTAX_ERROR]);
+	seq_printf(file, "dl_bad_ctrl_symbol_type_err_cnt = %d\n",
+		   hba->ufs_stats.dl_err_cnt[UFS_EC_DL_BAD_CTRL_SYMBOL_TYPE]);
+	seq_printf(file, "dl_pa_init_err_cnt = %d\n",
+		   hba->ufs_stats.dl_err_cnt[UFS_EC_DL_PA_INIT_ERROR]);
+	seq_printf(file, "dl_pa_error_ind_received = %d\n",
+		   hba->ufs_stats.dl_err_cnt[UFS_EC_DL_PA_ERROR_IND_RECEIVED]);
+	seq_printf(file, "dme_err_cnt = %d\n", hba->ufs_stats.dme_err_cnt);
+
 	return 0;
 }
 

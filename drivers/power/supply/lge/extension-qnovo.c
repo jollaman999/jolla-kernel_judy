@@ -526,7 +526,7 @@ static int monitor_fcc(struct qnovo *chip)
 	/* get dc voltage */
 	if (ext_qnovo.is_dc) {
 		rc = power_supply_get_property(ext_qnovo.wireless_psy,
-				POWER_SUPPLY_PROP_VOLTAGE_MAX, &pval);
+				POWER_SUPPLY_PROP_VOLTAGE_NOW, &pval);
 		now_dc_volt = !rc ? pval.intval : 0;
 	}
 
@@ -556,11 +556,16 @@ static int rt_qni_probation(struct qnovo *chip)
 	if (!is_main_available())
 		return -EINVAL;
 
-	if ((ext_qnovo.set_fcc > ext_dt.qni_probation_enter_fcc)        ||
-		(ext_qnovo.is_dc && ext_qnovo.dc_volt != DC_VOLTAGE_MV_BPP) ||
-		!(ext_qnovo.health == POWER_SUPPLY_HEALTH_GOOD)             ){
-		release_qni_probation(chip);
-		return 0;
+	if ((ext_qnovo.set_fcc > ext_dt.qni_probation_enter_fcc) ||
+		!(ext_qnovo.health == POWER_SUPPLY_HEALTH_GOOD)      ){
+		if (!ext_qnovo.is_dc) {
+			release_qni_probation(chip);
+			return 0;
+		}
+		else if (ext_qnovo.dc_volt != DC_VOLTAGE_MV_BPP) {
+			release_qni_probation(chip);
+			return 0;
+		}
 	}
 
 	/* current */
@@ -590,7 +595,7 @@ static int rt_qni_probation(struct qnovo *chip)
 
 	pr_info("[QNI-PROB] set run-time qni probation: "
 			"[fcc] now:%d, max:%d, sel:%d "
-			"[fv] now:%d, min:%d, qnovo:%d, sel:%d"
+			"[fv] now:%d, min:%d, qnovo:%d, sel:%d "
 			"[wlc] en:%d, volt:%d\n",
 				ext_qnovo.set_fcc/1000,
 				ext_dt.qni_probation_max_fcc/1000,

@@ -124,6 +124,11 @@ size_t ion_system_heap_secure_page_pool_total(struct ion_heap *heap,
 	return total << PAGE_SHIFT;
 }
 
+static int ion_heap_is_system_heap_type(enum ion_heap_type type)
+{
+	return type == ((enum ion_heap_type)ION_HEAP_TYPE_SYSTEM);
+}
+
 static struct page *alloc_buffer_page(struct ion_system_heap *heap,
 				      struct ion_buffer *buffer,
 				      unsigned long order,
@@ -369,6 +374,23 @@ static unsigned int process_info(struct page_info *info,
 }
 
 #ifdef CONFIG_MIGRATE_HIGHORDER
+static unsigned long total_highorder_pool_pages(struct ion_system_heap *heap)
+{
+	unsigned long total_size = 0;
+	struct ion_page_pool *pool;
+	int order, i;
+
+	for (i = 0; i < num_highorders; i++) {
+		order = highorders[i];
+		pool = heap->highorder_pools[i];
+		if (mutex_trylock(&pool->mutex)) {
+			total_size += (1 << order) * PAGE_SIZE * atomic_read(&pool->low_count);
+			mutex_unlock(&pool->mutex);
+		}
+	}
+	return total_size;
+}
+
 static struct page *alloc_buffer_highorder_page(struct ion_system_heap *heap,
 				      struct ion_buffer *buffer,
 				      unsigned long order,
@@ -403,6 +425,10 @@ struct page_info *alloc_largest_highorder(struct ion_system_heap *heap,
 	if (size < MIN_HIGHORDER_SZ)
 		return NULL;
 
+	from_pool = !(buffer->flags & ION_FLAG_POOL_FORCE_ALLOC);
+	if (!from_pool)
+		return NULL;
+
 	info = kmalloc(sizeof(struct page_info), GFP_KERNEL);
 	if (!info)
 		return NULL;
@@ -412,7 +438,6 @@ struct page_info *alloc_largest_highorder(struct ion_system_heap *heap,
 			continue;
 		if (max_order < highorders[i])
 			continue;
-		from_pool = !(buffer->flags & ION_FLAG_POOL_FORCE_ALLOC);
 		page = alloc_buffer_highorder_page(heap, buffer, highorders[i], &from_pool);
 		if (!page)
 			continue;
@@ -478,7 +503,7 @@ static int ion_system_heap_allocate(struct ion_heap *heap,
 	int ret;
 	struct list_head pages;
 	struct list_head pages_from_pool;
-	struct page_info *info, *tmp_info;
+	struct page_info *info = NULL, *tmp_info;
 	int i = 0;
 	unsigned int nents_sync = 0;
 	unsigned long size_remaining = PAGE_ALIGN(size);
@@ -489,7 +514,15 @@ static int ion_system_heap_allocate(struct ion_heap *heap,
 	struct device *dev = heap->priv;
 #ifdef CONFIG_MIGRATE_HIGHORDER
 	unsigned int highorder_sz = 0;
+	int use_highorder  = 0;
 #endif
+
+	if (ion_heap_is_system_heap_type(buffer->heap->type) &&
+	    is_secure_vmid_valid(vmid)) {
+		pr_info("%s: System heap doesn't support secure allocations\n",
+			__func__);
+		return -EINVAL;
+	}
 
 	if (align > PAGE_SIZE)
 		return -EINVAL;
@@ -500,6 +533,12 @@ static int ion_system_heap_allocate(struct ion_heap *heap,
 	data.size = 0;
 	INIT_LIST_HEAD(&pages);
 	INIT_LIST_HEAD(&pages_from_pool);
+
+#ifdef CONFIG_MIGRATE_HIGHORDER
+	if ((global_page_state(NR_FREE_HIGHORDER_PAGES) > size_remaining/PAGE_SIZE)
+		|| (size_remaining < total_highorder_pool_pages(sys_heap)))
+		use_highorder = 1;
+#endif
 
 	while (size_remaining > 0) {
 		if (is_secure_vmid_valid(vmid))
@@ -517,9 +556,10 @@ static int ion_system_heap_allocate(struct ion_heap *heap,
 				info = alloc_largest_available(sys_heap, buffer,
 						size_remaining, max_order);
 			} else {
-				info = alloc_largest_highorder(sys_heap, buffer,
+				if (use_highorder) {
+					info = alloc_largest_highorder(sys_heap, buffer,
 						size_remaining,	highorders[0]);
-
+				}
 				if (!info) {
 					info = alloc_largest_available(sys_heap, buffer,
 							size_remaining, max_order);
@@ -547,6 +587,7 @@ static int ion_system_heap_allocate(struct ion_heap *heap,
 		size_remaining -= sz;
 		max_order = info->order;
 		i++;
+		info = NULL;
 	}
 
 	ret = msm_ion_heap_alloc_pages_mem(&data);
@@ -623,6 +664,9 @@ static int ion_system_heap_allocate(struct ion_heap *heap,
 	if (nents_sync)
 		sg_free_table(&table_sync);
 	msm_ion_heap_free_pages_mem(&data);
+#ifdef CONFIG_MIGRATE_HIGHORDER
+	trace_ion_alloc_count(heap->name, size, flags, buffer->highorder_size);
+#endif
 	return 0;
 
 err_free_sg2:
@@ -1113,7 +1157,7 @@ static int ion_system_contig_heap_allocate(struct ion_heap *heap,
 	if (align > (PAGE_SIZE << order))
 		return -EINVAL;
 
-	page = alloc_pages(low_order_gfp_flags | __GFP_ZERO, order);
+	page = alloc_pages(low_order_gfp_flags | __GFP_ZERO | __GFP_NOWARN, order);
 	if (!page)
 		return -ENOMEM;
 

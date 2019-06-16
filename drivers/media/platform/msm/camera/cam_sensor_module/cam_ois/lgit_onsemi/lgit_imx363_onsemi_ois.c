@@ -40,13 +40,16 @@
 #define OIS_GYRO_ADDR           (0xE002)
 #define OIS_HALL_X_OFFSET       (0x0110)
 #define OIS_HALL_Y_OFFSET       (0x0160)
+#define OIS_GYRO_GAIN_X         (0x82b8)
+#define OIS_GYRO_GAIN_Y         (0x8318)
+#define OIS_GYRO_DEFAULT_GAIN   (9024)
 
 extern struct class* get_camera_class(void);
 static struct class *camera_ois_hall_class = NULL;
 static struct ois_timer ois_timer_t;
 static void msm_ois_read_work(struct work_struct *work);
-static bool msm_ois_data_enqueue(uint64_t x_readout_time, int16_t x_shift,
-		uint64_t y_readout_time, int16_t y_shift, struct msm_ois_readout_buffer *o_buf);
+static bool msm_ois_data_enqueue(uint64_t x_readout_time, int32_t x_shift,
+		uint64_t y_readout_time, int32_t y_shift, struct msm_ois_readout_buffer *o_buf);
 static int msm_startGyroThread(struct cam_ois_ctrl_t *o_ctrl);
 extern int msm_stopGyroThread(void);
 extern int parse_ois_userdata(struct cam_cmd_ois_userdata *ois_userdata,
@@ -156,8 +159,8 @@ static void msm_ois_read_work(struct work_struct *work)
 	uint8_t buf[6] = {0,};
 	uint64_t x_readout_time;
 	uint64_t y_readout_time;
-	int16_t x_shift = 0;
-	int16_t y_shift = 0;
+	int32_t x_shift = 0;
+	int32_t y_shift = 0;
 	struct ois_timer *ois_timer_in_t = NULL;
 
 	ois_timer_in_t = container_of(work, struct ois_timer, g_work);
@@ -166,9 +169,14 @@ static void msm_ois_read_work(struct work_struct *work)
 	rc = ois_i2c_read_seq(OIS_HALL_SEQ_ADDR, buf, 6);
 	x_readout_time = y_readout_time  = arch_counter_get_cntvct();
 
-	x_shift = (int16_t)((buf[0] << 8) | (buf[1]));
-	y_shift = (int16_t)((buf[2] << 8) | (buf[3]));
-//	CAM_ERR(CAM_OIS, "[OIS] Hall x : %hd y : %hd", x_shift, y_shift);
+	x_shift = (int32_t)((int16_t)((buf[0] << 8) | (buf[1])));
+	y_shift = (int32_t)((int16_t)((buf[2] << 8) | (buf[3])));
+
+	x_shift = x_shift * 32767 /
+        (ois_timer_in_t->o_ctrl->gyro_gain_x > 0 ? ois_timer_in_t->o_ctrl->gyro_gain_x : OIS_GYRO_DEFAULT_GAIN);
+	y_shift = y_shift * 32767 /
+        (ois_timer_in_t->o_ctrl->gyro_gain_y > 0 ? ois_timer_in_t->o_ctrl->gyro_gain_y : OIS_GYRO_DEFAULT_GAIN);
+	//CAM_ERR(CAM_OIS, "[OIS] Hall x : %d y : %d", x_shift, y_shift);
 
 	if (rc != 0) {
 		ois_timer_t.i2c_fail_count++;
@@ -191,9 +199,9 @@ static void msm_ois_read_work(struct work_struct *work)
 }
 
 static bool msm_ois_data_enqueue(uint64_t x_readout_time,
-		int16_t x_shift,
+		int32_t x_shift,
 		uint64_t y_readout_time,
-		int16_t y_shift,
+		int32_t y_shift,
 		struct msm_ois_readout_buffer *o_buf)
 {
 	bool rc;
@@ -646,6 +654,8 @@ int32_t lgit_imx363_init_set_onsemi_ois(struct cam_ois_ctrl_t *o_ctrl)
 	uint16_t vcm_ver = 0;
 	DSPVER Dspcode;
 	DOWNLOAD_TBL* ptr;
+	uint8_t gyro_gain_x[2];
+	uint8_t gyro_gain_y[2];
 
 	local_cam_ois_t = o_ctrl;
 
@@ -688,6 +698,25 @@ int32_t lgit_imx363_init_set_onsemi_ois(struct cam_ois_ctrl_t *o_ctrl)
 		return rc;
 	}
 	RemapMain();
+
+	// Read Gyro Gain
+	ois_i2c_read_seq(OIS_GYRO_GAIN_X, gyro_gain_x, 2);
+	local_cam_ois_t->gyro_gain_x = (gyro_gain_x[0] << 8 | gyro_gain_x[1]);
+	ois_i2c_read_seq(OIS_GYRO_GAIN_Y, gyro_gain_y, 2);
+	local_cam_ois_t->gyro_gain_y = (gyro_gain_y[0] << 8 | gyro_gain_y[1]);
+
+	if(local_cam_ois_t->gyro_gain_x == 0 ||
+			local_cam_ois_t->gyro_gain_x == 0xFFFF) {
+		local_cam_ois_t->gyro_gain_x = OIS_GYRO_DEFAULT_GAIN;
+	}
+
+	if(local_cam_ois_t->gyro_gain_y == 0 ||
+			local_cam_ois_t->gyro_gain_y == 0xFFFF) {
+		local_cam_ois_t->gyro_gain_y = OIS_GYRO_DEFAULT_GAIN;
+	}
+
+    CAM_ERR(CAM_OIS, " gain %d %d",
+        local_cam_ois_t->gyro_gain_x, local_cam_ois_t->gyro_gain_y);
 
 	CAM_ERR(CAM_OIS, "done.");
 

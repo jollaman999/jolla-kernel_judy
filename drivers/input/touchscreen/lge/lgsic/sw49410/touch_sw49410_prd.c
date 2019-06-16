@@ -106,7 +106,7 @@ static void prd_param_set(struct device *dev)
 static void log_file_size_check(struct device *dev)
 {
 	char *fname = NULL;
-	struct file *file;
+	struct file *file = NULL;
 	loff_t file_size = 0;
 	int i = 0;
 	char buf1[128] = {0};
@@ -121,7 +121,7 @@ static void log_file_size_check(struct device *dev)
 
 	switch (boot_mode) {
 		case NORMAL_BOOT:
-			fname = "/sdcard/touch_self_test.txt";
+			fname = "/data/vendor/touch/touch_self_test.txt";
 			break;
 		case MINIOS_AAT:
 			fname = "/data/touch/touch_self_test.txt";
@@ -199,8 +199,8 @@ static void write_file(struct device *dev, char *data, int write_time)
 	int fd = 0;
 	char *fname = NULL;
 	char time_string[TIME_STR_LEN] = {0};
-	struct timespec my_time;
-	struct tm my_date;
+	struct timespec my_time = {0, };
+	struct tm my_date = {0, };
 	int boot_mode = 0;
 
 	mm_segment_t old_fs = get_fs();
@@ -210,7 +210,7 @@ static void write_file(struct device *dev, char *data, int write_time)
 
 	switch (boot_mode) {
 		case NORMAL_BOOT:
-			fname = "/sdcard/touch_self_test.txt";
+			fname = "/data/vendor/touch/touch_self_test.txt";
 			break;
 		case MINIOS_AAT:
 			fname = "/data/touch/touch_self_test.txt";
@@ -238,7 +238,7 @@ static void write_file(struct device *dev, char *data, int write_time)
 		if (write_time == TIME_INFO_WRITE) {
 			my_time = current_kernel_time();
 			time_to_tm(my_time.tv_sec, sys_tz.tz_minuteswest * 60 * (-1), &my_date);
-			snprintf(time_string, TIME_STR_LEN,
+			touch_snprintf(time_string, TIME_STR_LEN,
 				"\n[%02d-%02d %02d:%02d:%02d.%03lu]\n",
 				my_date.tm_mon + 1,
 				my_date.tm_mday, my_date.tm_hour,
@@ -397,31 +397,31 @@ static int prd_read_print_frame(struct device *dev, int offset, int row, int col
 						(u16 *)data_buf, row*col*sizeof(u16));
 
 	/* print a frame data */
-	ret = snprintf(w_buf, PAGE_SIZE, "\n  : ");
-	log_ret = snprintf(log_buf, LOG_BUF_SIZE - log_ret, "  : ");
+	ret = touch_snprintf(w_buf, PAGE_SIZE, "\n  : ");
+	log_ret = touch_snprintf(log_buf, LOG_BUF_SIZE - log_ret, "  : ");
 
 
 	//print data
 	for (i = 0; i < col; i++) {
-		ret += snprintf(w_buf + ret, PAGE_SIZE - ret, " [%2d]", i);
-		log_ret += snprintf(log_buf + log_ret, LOG_BUF_SIZE - log_ret, " [%2d]", i);
+		ret += touch_snprintf(w_buf + ret, PAGE_SIZE - ret, " [%2d]", i);
+		log_ret += touch_snprintf(log_buf + log_ret, LOG_BUF_SIZE - log_ret, " [%2d]", i);
 	}
 	TOUCH_I("%s\n", log_buf);
 
 	for (i = 0; i < row; i++) {
 		log_ret = 0;
 		memset(log_buf, 0, sizeof(log_buf));
-		ret += snprintf(w_buf + ret, PAGE_SIZE - ret,  "\n[%2d]", i);
-		log_ret += snprintf(log_buf + log_ret, LOG_BUF_SIZE - log_ret,  "[%2d]", i);
+		ret += touch_snprintf(w_buf + ret, PAGE_SIZE - ret,  "\n[%2d]", i);
+		log_ret += touch_snprintf(log_buf + log_ret, LOG_BUF_SIZE - log_ret,  "[%2d]", i);
 
 		for (j = 0; j < col; j++) {
-			ret += snprintf(w_buf + ret, PAGE_SIZE - ret, "%5d", data_buf[i*col + j]);
-			log_ret += snprintf(log_buf + log_ret, LOG_BUF_SIZE - log_ret, "%5d", data_buf[i*col + j]);
+			ret += touch_snprintf(w_buf + ret, PAGE_SIZE - ret, "%5d", data_buf[i*col + j]);
+			log_ret += touch_snprintf(log_buf + log_ret, LOG_BUF_SIZE - log_ret, "%5d", data_buf[i*col + j]);
 		}
 		TOUCH_I("%s\n", log_buf);
 	}
 
-	ret += snprintf(w_buf + ret, PAGE_SIZE - ret, "\n");
+	ret += touch_snprintf(w_buf + ret, PAGE_SIZE - ret, "\n");
 	write_file(dev, w_buf, TIME_INFO_SKIP);
 	memset(w_buf, 0, BUF_SIZE);
 
@@ -494,35 +494,6 @@ static int prd_os_xline_result_read(struct device *dev, int type)
 	return ret;
 }
 
-static int sdcard_spec_file_read(struct device *dev)
-{
-	struct sw49410_data *d = to_sw49410_data(dev);
-	struct siw_hal_prd_data *prd = (struct siw_hal_prd_data *)d->prd;
-	struct prd_test_param *param = &prd->prd_param;
-	int ret = 0;
-	int fd = 0;
-	char *path[2] = {param->spec_file_path, param->mfts_spec_file_path};
-	int path_idx = 0;
-
-	mm_segment_t old_fs = get_fs();
-
-	if(touch_boot_mode_check(dev) >= MINIOS_MFTS_FOLDER)
-		path_idx = 1;
-	else
-		path_idx = 0;
-	set_fs(KERNEL_DS);
-	fd = sys_open(path[path_idx], O_RDONLY, 0);
-	if (fd >= 0) {
-		sys_read(fd, line, sizeof(line));
-		sys_close(fd);
-		TOUCH_I("%s file existing\n", path[path_idx]);
-		ret = 1;
-	}
-	set_fs(old_fs);
-
-	return ret;
-}
-
 static int spec_file_read(struct device *dev)
 {
 	int ret = 0;
@@ -538,24 +509,30 @@ static int spec_file_read(struct device *dev)
 
 	if (ts->panel_spec == NULL || ts->panel_spec_mfts == NULL) {
 		TOUCH_E("panel_spec_file name is null\n");
-		ret = -1;
+		ret = -ENOENT;
 		goto error;
 	}
 
-	if (request_firmware(&fwlimit, path[path_idx], dev) < 0) {
+	ret = request_firmware(&fwlimit, path[path_idx], dev);
+	if (ret) {
 		TOUCH_E("request ihex is failed in normal mode\n");
 		TOUCH_E("path_idx:%d, path:%s \n", path_idx, path[path_idx]);
-		ret = -1;
 		goto error;
 	}
 
 	if (fwlimit->data == NULL) {
-		ret = -1;
 		TOUCH_E("fwlimit->data is NULL\n");
+		ret = -EINVAL;
 		goto error;
 	}
 
-	strlcpy(line, fwlimit->data, sizeof(line));
+	if (fwlimit->size == 0) {
+		TOUCH_E("fwlimit->size is 0\n");
+		ret = -EINVAL;
+		goto error;
+	}
+
+	strlcpy(line, fwlimit->data, fwlimit->size);
 
 error:
 	if (fwlimit)
@@ -571,9 +548,9 @@ static int sic_get_limit(struct device *dev, char *breakpoint, u16 (*buf)[COL_SI
 	int r = 0;
 	int cipher = 1;
 	int ret = 0;
+	int retval = 0;
 	char *found;
 	int boot_mode = 0;
-	int file_exist = 0;
 	int tx_num = 0;
 	int rx_num = 0;
 
@@ -588,11 +565,10 @@ static int sic_get_limit(struct device *dev, char *breakpoint, u16 (*buf)[COL_SI
 		goto error;
 	}
 
-	file_exist = sdcard_spec_file_read(dev);
-	if (!file_exist) {
-		ret = spec_file_read(dev);
-		if (ret == -1)
-			goto error;
+	retval = spec_file_read(dev);
+	if (retval) {
+		ret = retval;
+		goto error;
 	}
 
 	if (line == NULL) {
@@ -699,34 +675,34 @@ static int prd_open_short_test(struct device *dev)
 
 	/* fail case */
 	if (openshort_all_result != 0) {
-		ret = snprintf(w_buf + ret, BUF_SIZE - ret, "OPEN_SHORT_ALL_TEST : Fail\n");
+		ret = touch_snprintf(w_buf + ret, BUF_SIZE - ret, "OPEN_SHORT_ALL_TEST : Fail\n");
 		TOUCH_I("OPEN_SHORT_ALL_TEST : Fail\n");
 
 		/*
-		ret = snprintf(w_buf, BUF_SIZE, "\n   : ");
+		ret = touch_snprintf(w_buf, BUF_SIZE, "\n   : ");
 		for (i = 0; i < COL_SIZE; i++) {
-			ret += snprintf(w_buf + ret,
+			ret += touch_snprintf(w_buf + ret,
 					BUF_SIZE - ret,
 					" [%2d] ", i);
 			TOUCH
 		}
 
 		for (i = 0; i < ROW_SIZE; i++) {
-			ret += snprintf(w_buf + ret,
+			ret += touch_snprintf(w_buf + ret,
 					BUF_SIZE - ret,
 					"\n[%2d] ", i);
 			for (j = 0; j < COL_SIZE; j++) {
-				ret += snprintf(w_buf + ret,
+				ret += touch_snprintf(w_buf + ret,
 					BUF_SIZE - ret, "%5s ",
 				((buf[i][j] & 0x3) == 0x3) ?  "O,S" :
 				((buf[i][j] & 0x1) == 0x1) ?  "O" :
 				((buf[i][j] & 0x2) == 0x2) ?  "S" : "-");
 			}
 		}
-		ret += snprintf(w_buf + ret, BUF_SIZE - ret, "\n");
+		ret += touch_snprintf(w_buf + ret, BUF_SIZE - ret, "\n");
 		*/
 	} else {
-		ret = snprintf(w_buf + ret, BUF_SIZE - ret, "OPEN_SHORT_ALL_TEST : Pass\n");
+		ret = touch_snprintf(w_buf + ret, BUF_SIZE - ret, "OPEN_SHORT_ALL_TEST : Pass\n");
 		TOUCH_I("OPEN_SHORT_ALL_TEST : Pass\n");
 	}
 
@@ -829,52 +805,52 @@ static int prd_compare_rawdata(struct device *dev, u8 type)
 
 	switch (type) {
 	case U3_M1_RAWDATA_TEST:
-		snprintf(lower_str, sizeof(lower_str), "U3_M1_Lower");
-		snprintf(upper_str, sizeof(upper_str), "U3_M1_Upper");
+		touch_snprintf(lower_str, sizeof(lower_str), "U3_M1_Lower");
+		touch_snprintf(upper_str, sizeof(upper_str), "U3_M1_Upper");
 		col_size = M1_COL_SIZE;
 		break;
 	case U3_M1_JITTER_TEST:
-		snprintf(lower_str, sizeof(lower_str), "U3_M1_JITTER_Lower");
-		snprintf(upper_str, sizeof(upper_str), "U3_M1_JITTER_Upper");
+		touch_snprintf(lower_str, sizeof(lower_str), "U3_M1_JITTER_Lower");
+		touch_snprintf(upper_str, sizeof(upper_str), "U3_M1_JITTER_Upper");
 		col_size = M1_COL_SIZE;
 		break;
 	case U3_M2_RAWDATA_TEST:
-		snprintf(lower_str, sizeof(lower_str), "U3_M2_Lower");
-		snprintf(upper_str, sizeof(upper_str), "U3_M2_Upper");
+		touch_snprintf(lower_str, sizeof(lower_str), "U3_M2_Lower");
+		touch_snprintf(upper_str, sizeof(upper_str), "U3_M2_Upper");
 		break;
 	case U3_M2_JITTER_TEST:
-		snprintf(lower_str, sizeof(lower_str), "U3_M2_JITTER_Lower");
-		snprintf(upper_str, sizeof(upper_str), "U3_M2_JITTER_Upper");
+		touch_snprintf(lower_str, sizeof(lower_str), "U3_M2_JITTER_Lower");
+		touch_snprintf(upper_str, sizeof(upper_str), "U3_M2_JITTER_Upper");
 		break;
 	case U0_M1_RAWDATA_TEST:
-		snprintf(lower_str, sizeof(lower_str), "U0_M1_Lower");
-		snprintf(upper_str, sizeof(upper_str), "U0_M1_Upper");
+		touch_snprintf(lower_str, sizeof(lower_str), "U0_M1_Lower");
+		touch_snprintf(upper_str, sizeof(upper_str), "U0_M1_Upper");
 		col_size = M1_COL_SIZE;
 		break;
 	case U0_M1_JITTER_TEST:
-		snprintf(lower_str, sizeof(lower_str), "U0_M1_JITTER_Lower");
-		snprintf(upper_str, sizeof(upper_str), "U0_M1_JITTER_Upper");
+		touch_snprintf(lower_str, sizeof(lower_str), "U0_M1_JITTER_Lower");
+		touch_snprintf(upper_str, sizeof(upper_str), "U0_M1_JITTER_Upper");
 		col_size = M1_COL_SIZE;
 		break;
 	case U0_M2_RAWDATA_TEST:
-		snprintf(lower_str, sizeof(lower_str), "U0_M2_Lower");
-		snprintf(upper_str, sizeof(upper_str), "U0_M2_Upper");
+		touch_snprintf(lower_str, sizeof(lower_str), "U0_M2_Lower");
+		touch_snprintf(upper_str, sizeof(upper_str), "U0_M2_Upper");
 		break;
 	case U0_M2_JITTER_TEST:
-		snprintf(lower_str, sizeof(lower_str), "U0_M2_JITTER_Lower");
-		snprintf(upper_str, sizeof(upper_str), "U0_M2_JITTER_Upper");
+		touch_snprintf(lower_str, sizeof(lower_str), "U0_M2_JITTER_Lower");
+		touch_snprintf(upper_str, sizeof(upper_str), "U0_M2_JITTER_Upper");
 		break;
 	case U3_M2_DELTA_TEST:
-		snprintf(lower_str, sizeof(lower_str), "U3_M2_DELTA_Lower");
-		snprintf(upper_str, sizeof(upper_str), "U3_M2_DELTA_Upper");
+		touch_snprintf(lower_str, sizeof(lower_str), "U3_M2_DELTA_Lower");
+		touch_snprintf(upper_str, sizeof(upper_str), "U3_M2_DELTA_Upper");
 		break;
 	case U0_M2_DELTA_TEST:
-		snprintf(lower_str, sizeof(lower_str), "U0_M2_DELTA_Lower");
-		snprintf(upper_str, sizeof(upper_str), "U0_M2_DELTA_Upper");
+		touch_snprintf(lower_str, sizeof(lower_str), "U0_M2_DELTA_Lower");
+		touch_snprintf(upper_str, sizeof(upper_str), "U0_M2_DELTA_Upper");
 		break;
 	case U3_BLU_JITTER_TEST:
-		snprintf(lower_str, sizeof(lower_str), "U3_BLU_JITTER_Lower");
-		snprintf(upper_str, sizeof(upper_str), "U3_BLU_JITTER_Upper");
+		touch_snprintf(lower_str, sizeof(lower_str), "U3_BLU_JITTER_Lower");
+		touch_snprintf(upper_str, sizeof(upper_str), "U3_BLU_JITTER_Upper");
 		break;
 	}
 
@@ -903,18 +879,18 @@ static int prd_compare_rawdata(struct device *dev, u8 type)
 				if ((type != U0_M1_RAWDATA_TEST) && (i <= 1 && j <= 4)) {
 					if (data_buf[i*col_size+j] != 0) {
 						result = 1;
-						ret += snprintf(w_buf + ret, BUF_SIZE - ret,
+						ret += touch_snprintf(w_buf + ret, BUF_SIZE - ret,
 						"F [%d][%d] = %d\n", i, j, data_buf[i*col_size+j]);
 					}
 				} else {
 					result = 1;
-					ret += snprintf(w_buf + ret, BUF_SIZE - ret,
+					ret += touch_snprintf(w_buf + ret, BUF_SIZE - ret,
 					"F [%d][%d] = %d\n", i, j, data_buf[i*col_size+j]);
 				}
 #else
 				result = 1;
 				TOUCH_I("F [%d][%d] = %d , %d, %d\n", i, j, data_buf[i*col_size + j], LowerImage[i][j], UpperImage[i][j]);
-				ret += snprintf(w_buf + ret, BUF_SIZE - ret, "F [%d][%d] = %d\n", i, j, data_buf[i*col_size + j]);
+				ret += touch_snprintf(w_buf + ret, BUF_SIZE - ret, "F [%d][%d] = %d\n", i, j, data_buf[i*col_size + j]);
 #endif
 			}
 		}
@@ -923,7 +899,7 @@ static int prd_compare_rawdata(struct device *dev, u8 type)
 	if (param->sd_test_set & (1<<AVERAGE_JITTER_TEST)) {
 		if ((type == U3_M2_DELTA_TEST) || (type == U0_M2_DELTA_TEST)) {
 			//read spec file
-			snprintf(average_str, sizeof(average_str),
+			touch_snprintf(average_str, sizeof(average_str),
 		          "AVERAGE_JITTER");
 			sic_get_limit(dev, average_str, AverageImage);
 
@@ -950,13 +926,13 @@ static int prd_compare_rawdata(struct device *dev, u8 type)
 
 				if (m2_raw_average_buf[0][i] > AverageImage[i][0]) {
 					result = 1;
-					ret += snprintf(w_buf + ret, BUF_SIZE - ret,
+					ret += touch_snprintf(w_buf + ret, BUF_SIZE - ret,
 							"F [%d] Row Left Average = %d\n", i, m2_raw_average_buf[0][i]);
 					TOUCH_I("F [%d] Row Left Average = %d\n", i, m2_raw_average_buf[0][i]);
 				}
 				if (m2_raw_average_buf[1][i] > AverageImage[i][1]) {
 					result = 1;
-					ret += snprintf(w_buf + ret, BUF_SIZE - ret,
+					ret += touch_snprintf(w_buf + ret, BUF_SIZE - ret,
 							"F [%d] Row Right Average = %d\n", i, m2_raw_average_buf[1][i]);
 					TOUCH_I("F [%d] Row Right Average = %d\n", i, m2_raw_average_buf[1][i]);
 				}
@@ -973,31 +949,31 @@ static int tune_goft_print(t_goft_tune tune_val, char* log_buf, int mode_select)
 
 	if (mode_select == 1) {
 		if (tune_val.b.r_goft_tune_m1_sign == 0) {
-			ret += snprintf(log_buf + ret,
+			ret += touch_snprintf(log_buf + ret,
 					tc_tune_code_size - ret,
 					"-%d  ", tune_val.b.r_goft_tune_m1);
 			printk("-%d  ", tune_val.b.r_goft_tune_m1);
 		} else {
-			ret += snprintf(log_buf + ret,
+			ret += touch_snprintf(log_buf + ret,
 					tc_tune_code_size - ret,
 					"%d  ", tune_val.b.r_goft_tune_m1);
 			printk("%d  ", tune_val.b.r_goft_tune_m1);
 		}
 	} else if (mode_select == 2) {
 		if (tune_val.b.r_goft_tune_m2_sign == 0) {
-			ret += snprintf(log_buf + ret,
+			ret += touch_snprintf(log_buf + ret,
 					tc_tune_code_size - ret,
 					"-%d  ", tune_val.b.r_goft_tune_m2);
 			printk("-%d  ", tune_val.b.r_goft_tune_m2);
 		} else {
-			ret += snprintf(log_buf + ret,
+			ret += touch_snprintf(log_buf + ret,
 					tc_tune_code_size - ret,
 					"%d  ", tune_val.b.r_goft_tune_m2);
 			printk("%d  ", tune_val.b.r_goft_tune_m2);
 		}
 	}
 
-	ret += snprintf(log_buf + ret, tc_tune_code_size - ret, "\n");
+	ret += touch_snprintf(log_buf + ret, tc_tune_code_size - ret, "\n");
 	printk("\n");
 
 	return ret;
@@ -1009,25 +985,25 @@ static int tune_loft_print(int num_ch, u16* tune_val, char* log_buf)
 	int ret = 0;
 	int temp = 0;
 
-	ret = snprintf(log_buf, tc_tune_code_size, "Odd :  ");
+	ret = touch_snprintf(log_buf, tc_tune_code_size, "Odd :  ");
 	printk("Odd :  ");
 	for (i = 0; i < num_ch; i++) {
 		if (((tune_val[i] >> 5) & 1) == 0) {
 			temp = tune_val[i] & 0x1F;
 
-			ret += snprintf(log_buf + ret,
+			ret += touch_snprintf(log_buf + ret,
 					tc_tune_code_size - ret,
 					"-%d ", temp);
 			printk("-%d ", temp);
 		} else if (((tune_val[i] >> 5) & 1) == 1) {
 			temp = tune_val[i] & 0x1F;
 
-			ret += snprintf(log_buf + ret,
+			ret += touch_snprintf(log_buf + ret,
 					tc_tune_code_size - ret,
 					"%d  ", temp);
 			printk("%d  ", temp);
 		} else {
-			ret += snprintf(log_buf + ret,
+			ret += touch_snprintf(log_buf + ret,
 					tc_tune_code_size - ret,
 					"ISB  ");
 			printk("ISB  ");
@@ -1038,28 +1014,28 @@ static int tune_loft_print(int num_ch, u16* tune_val, char* log_buf)
 		}
 	}
 
-	ret += snprintf(log_buf + ret, tc_tune_code_size - ret, "\n");
+	ret += touch_snprintf(log_buf + ret, tc_tune_code_size - ret, "\n");
 	printk("\n");
-	ret += snprintf(log_buf + ret, tc_tune_code_size - ret, "Even : ");
+	ret += touch_snprintf(log_buf + ret, tc_tune_code_size - ret, "Even : ");
 	printk("Even : ");
 	for (i = 0; i < num_ch; i++) {
 		//TOUCH_I("psy>> %x %x << ", (tune_val[i] >> 13), ((tune_val[i] >> 13) & 1));
 		if (((tune_val[i] >> 13) & 1) == 0) {
 			temp = (tune_val[i] >> 8) & 0x1F;
 
-			ret += snprintf(log_buf + ret,
+			ret += touch_snprintf(log_buf + ret,
 					tc_tune_code_size - ret,
 					"-%d ", temp);
 			printk("-%d ", temp);
 		} else if (((tune_val[i] >> 13) & 1) == 1) {
 			temp = (tune_val[i] >> 8) & 0x1F;
 
-			ret += snprintf(log_buf + ret,
+			ret += touch_snprintf(log_buf + ret,
 					tc_tune_code_size - ret,
 					"%d  ", temp);
 			printk("%d  ", temp);
 		} else {
-			ret += snprintf(log_buf + ret,
+			ret += touch_snprintf(log_buf + ret,
 					tc_tune_code_size - ret,
 					"ISB  ");
 			printk("ISB  ");
@@ -1080,55 +1056,55 @@ static void tune_display(struct device *dev, struct tune_data_format *t, int typ
 
 	switch (type) {
 	case U0_M1_RAWDATA_TEST:
-		ret = snprintf(log_buf, tc_tune_code_size,
+		ret = touch_snprintf(log_buf, tc_tune_code_size,
 				"GOFT left  tune_code_read : ");
 		TOUCH_I("GOFT left  tune_code_read : ");
 
-		ret += snprintf(log_buf + ret, tc_tune_code_size - ret, "\n");
+		ret += touch_snprintf(log_buf + ret, tc_tune_code_size - ret, "\n");
 		write_file(dev, log_buf, TIME_INFO_SKIP);
 		ret = 0;
 		ret += tune_goft_print(t->r_goft_tune_u0_m1m2_left, log_buf, 1);
-		ret += snprintf(log_buf + ret, tc_tune_code_size - ret, "\n");
+		ret += touch_snprintf(log_buf + ret, tc_tune_code_size - ret, "\n");
 		write_file(dev, log_buf, TIME_INFO_SKIP);
 
 		ret = 0;
 
-		ret = snprintf(log_buf, tc_tune_code_size,
+		ret = touch_snprintf(log_buf, tc_tune_code_size,
 				"GOFT right tune_code_read : ");
 		TOUCH_I("GOFT right tune_code_read : ");
 
-		ret += snprintf(log_buf + ret, tc_tune_code_size - ret, "\n");
+		ret += touch_snprintf(log_buf + ret, tc_tune_code_size - ret, "\n");
 		write_file(dev, log_buf, TIME_INFO_SKIP);
 		ret = 0;
 		ret += tune_goft_print(t->r_goft_tune_u0_m1m2_right,
 								log_buf, 1);
-		ret += snprintf(log_buf + ret, tc_tune_code_size - ret, "\n");
+		ret += touch_snprintf(log_buf + ret, tc_tune_code_size - ret, "\n");
 		write_file(dev, log_buf, TIME_INFO_SKIP);
 //LOFT
 		ret = 0;
 
-		ret = snprintf(log_buf, tc_tune_code_size,
+		ret = touch_snprintf(log_buf, tc_tune_code_size,
 				"LOFT left tune_code_read : ");
 		TOUCH_I("LOFT left tune_code_read : ");
-		ret += snprintf(log_buf + ret, tc_tune_code_size - ret, "\n");
+		ret += touch_snprintf(log_buf + ret, tc_tune_code_size - ret, "\n");
 		printk("\n");
 		write_file(dev, log_buf, TIME_INFO_SKIP);
 		ret = 0;
 		ret += tune_loft_print(LOFT_CH_NUM, t->r_loft_tune_u0_m1_left, log_buf);
-		ret += snprintf(log_buf + ret, tc_tune_code_size - ret, "\n");
+		ret += touch_snprintf(log_buf + ret, tc_tune_code_size - ret, "\n");
 		printk("\n");
 		write_file(dev, log_buf, TIME_INFO_SKIP);
 		ret = 0;
 
-		ret = snprintf(log_buf, tc_tune_code_size,
+		ret = touch_snprintf(log_buf, tc_tune_code_size,
 				"LOFT right tune_code_read : ");
 		TOUCH_I("LOFT right tune_code_read : ");
-		ret += snprintf(log_buf + ret, tc_tune_code_size - ret, "\n");
+		ret += touch_snprintf(log_buf + ret, tc_tune_code_size - ret, "\n");
 		printk("\n");
 		write_file(dev, log_buf, TIME_INFO_SKIP);
 		ret = 0;
 		ret += tune_loft_print(LOFT_CH_NUM, t->r_loft_tune_u0_m1_right, log_buf);
-		ret += snprintf(log_buf + ret, tc_tune_code_size - ret, "\n");
+		ret += touch_snprintf(log_buf + ret, tc_tune_code_size - ret, "\n");
 		printk("\n");
 		write_file(dev, log_buf, TIME_INFO_SKIP);
 
@@ -1136,117 +1112,117 @@ static void tune_display(struct device *dev, struct tune_data_format *t, int typ
 
 	case U0_M2_RAWDATA_TEST:
 
-		ret = snprintf(log_buf, tc_tune_code_size,
+		ret = touch_snprintf(log_buf, tc_tune_code_size,
 				"GOFT left  tune_code_read : ");
 		TOUCH_I("GOFT left  tune_code_read : ");
-		ret += snprintf(log_buf + ret, tc_tune_code_size - ret, "\n");
+		ret += touch_snprintf(log_buf + ret, tc_tune_code_size - ret, "\n");
 		write_file(dev, log_buf, TIME_INFO_SKIP);
 		ret = 0;
 		ret += tune_goft_print(t->r_goft_tune_u0_m1m2_left, log_buf, 2);
-		ret += snprintf(log_buf + ret, tc_tune_code_size - ret, "\n");
+		ret += touch_snprintf(log_buf + ret, tc_tune_code_size - ret, "\n");
 		write_file(dev, log_buf, TIME_INFO_SKIP);
 
 		ret = 0;
 
-		ret = snprintf(log_buf, tc_tune_code_size,
+		ret = touch_snprintf(log_buf, tc_tune_code_size,
 				"GOFTi right tune_code_read : ");
 		TOUCH_I("GOFTi right tune_code_read : ");
 
-		ret += snprintf(log_buf + ret, tc_tune_code_size - ret, "\n");
+		ret += touch_snprintf(log_buf + ret, tc_tune_code_size - ret, "\n");
 		write_file(dev, log_buf, TIME_INFO_SKIP);
 		ret = 0;
 		ret += tune_goft_print(t->r_goft_tune_u0_m1m2_right,
 								log_buf, 2);
-		ret += snprintf(log_buf + ret, tc_tune_code_size - ret, "\n");
+		ret += touch_snprintf(log_buf + ret, tc_tune_code_size - ret, "\n");
 		write_file(dev, log_buf, TIME_INFO_SKIP);
 
 		ret = 0;
 
-		ret = snprintf(log_buf, tc_tune_code_size,
+		ret = touch_snprintf(log_buf, tc_tune_code_size,
 				"LOFT G1 left tune_code_read : ");
 		TOUCH_I("LOFT G1 left tune_code_read : ");
-		ret += snprintf(log_buf + ret, tc_tune_code_size - ret, "\n");
+		ret += touch_snprintf(log_buf + ret, tc_tune_code_size - ret, "\n");
 		printk("\n");
 		write_file(dev, log_buf, TIME_INFO_SKIP);
 		ret = 0;
 		ret += tune_loft_print(LOFT_CH_NUM, t->r_loft_tune_u0_m2_g1_left,
 								log_buf);
-		ret += snprintf(log_buf + ret, tc_tune_code_size - ret, "\n");
+		ret += touch_snprintf(log_buf + ret, tc_tune_code_size - ret, "\n");
 		printk("\n");
 		write_file(dev, log_buf, TIME_INFO_SKIP);
 
 		ret = 0;
 
-		ret = snprintf(log_buf, tc_tune_code_size,
+		ret = touch_snprintf(log_buf, tc_tune_code_size,
 				"LOFT G1 right tune_code_read : ");
 		TOUCH_I("LOFT G1 right tune_code_read : ");
-		ret += snprintf(log_buf + ret, tc_tune_code_size - ret, "\n");
+		ret += touch_snprintf(log_buf + ret, tc_tune_code_size - ret, "\n");
 		printk("\n");
 		write_file(dev, log_buf, TIME_INFO_SKIP);
 		ret = 0;
 		ret += tune_loft_print(LOFT_CH_NUM, t->r_loft_tune_u0_m2_g1_right,
 								log_buf);
-		ret += snprintf(log_buf + ret, tc_tune_code_size - ret, "\n");
+		ret += touch_snprintf(log_buf + ret, tc_tune_code_size - ret, "\n");
 		printk("\n");
 		write_file(dev, log_buf, TIME_INFO_SKIP);
 
 		ret = 0;
 
-		ret = snprintf(log_buf, tc_tune_code_size,
+		ret = touch_snprintf(log_buf, tc_tune_code_size,
 				"LOFT G2 left tune_code_read : ");
 		TOUCH_I("LOFT G2 left tune_code_read : ");
-		ret += snprintf(log_buf + ret, tc_tune_code_size - ret, "\n");
+		ret += touch_snprintf(log_buf + ret, tc_tune_code_size - ret, "\n");
 		printk("\n");
 		write_file(dev, log_buf, TIME_INFO_SKIP);
 		ret = 0;
 		ret += tune_loft_print(LOFT_CH_NUM, t->r_loft_tune_u0_m2_g2_left,
 								log_buf);
-		ret += snprintf(log_buf + ret, tc_tune_code_size - ret, "\n");
+		ret += touch_snprintf(log_buf + ret, tc_tune_code_size - ret, "\n");
 		printk("\n");
 		write_file(dev, log_buf, TIME_INFO_SKIP);
 
 		ret = 0;
 
-		ret = snprintf(log_buf, tc_tune_code_size,
+		ret = touch_snprintf(log_buf, tc_tune_code_size,
 				"LOFT G2 right tune_code_read : ");
 		TOUCH_I("LOFT G2 right tune_code_read : ");
-		ret += snprintf(log_buf + ret, tc_tune_code_size - ret, "\n");
+		ret += touch_snprintf(log_buf + ret, tc_tune_code_size - ret, "\n");
 		printk("\n");
 		write_file(dev, log_buf, TIME_INFO_SKIP);
 		ret = 0;
 		ret += tune_loft_print(LOFT_CH_NUM, t->r_loft_tune_u0_m2_g2_right,
 								log_buf);
-		ret += snprintf(log_buf + ret, tc_tune_code_size - ret, "\n");
+		ret += touch_snprintf(log_buf + ret, tc_tune_code_size - ret, "\n");
 		printk("\n");
 		write_file(dev, log_buf, TIME_INFO_SKIP);
 
 		ret = 0;
 
-		ret = snprintf(log_buf, tc_tune_code_size,
+		ret = touch_snprintf(log_buf, tc_tune_code_size,
 				"LOFT G3 left tune_code_read : ");
 		TOUCH_I("LOFT G3 left tune_code_read : ");
-		ret += snprintf(log_buf + ret, tc_tune_code_size - ret, "\n");
+		ret += touch_snprintf(log_buf + ret, tc_tune_code_size - ret, "\n");
 		printk("\n");
 		write_file(dev, log_buf, TIME_INFO_SKIP);
 		ret = 0;
 		ret += tune_loft_print(LOFT_CH_NUM, t->r_loft_tune_u0_m2_g3_left,
 								log_buf);
-		ret += snprintf(log_buf + ret, tc_tune_code_size - ret, "\n");
+		ret += touch_snprintf(log_buf + ret, tc_tune_code_size - ret, "\n");
 		printk("\n");
 		write_file(dev, log_buf, TIME_INFO_SKIP);
 
 		ret = 0;
 
-		ret = snprintf(log_buf, tc_tune_code_size,
+		ret = touch_snprintf(log_buf, tc_tune_code_size,
 				"LOFT G3 right tune_code_read : ");
 		TOUCH_I("LOFT G3 right tune_code_read : ");
-		ret += snprintf(log_buf + ret, tc_tune_code_size - ret, "\n");
+		ret += touch_snprintf(log_buf + ret, tc_tune_code_size - ret, "\n");
 		printk("\n");
 		write_file(dev, log_buf, TIME_INFO_SKIP);
 		ret = 0;
 		ret += tune_loft_print(LOFT_CH_NUM, t->r_loft_tune_u0_m2_g3_right,
 								log_buf);
-		ret += snprintf(log_buf + ret, tc_tune_code_size - ret, "\n");
+		ret += touch_snprintf(log_buf + ret, tc_tune_code_size - ret, "\n");
 		printk("\n");
 		write_file(dev, log_buf, TIME_INFO_SKIP);
 
@@ -1254,117 +1230,117 @@ static void tune_display(struct device *dev, struct tune_data_format *t, int typ
 
 	case U3_M2_RAWDATA_TEST:
 
-		ret = snprintf(log_buf, tc_tune_code_size,
+		ret = touch_snprintf(log_buf, tc_tune_code_size,
 				"GOFT left  tune_code_read : ");
 		TOUCH_I("GOFT left  tune_code_read : ");
 
-		ret += snprintf(log_buf + ret, tc_tune_code_size - ret, "\n");
+		ret += touch_snprintf(log_buf + ret, tc_tune_code_size - ret, "\n");
 		write_file(dev, log_buf, TIME_INFO_SKIP);
 		ret = 0;
 		ret += tune_goft_print(t->r_goft_tune_u3_m1m2_left, log_buf, 2);
-		ret += snprintf(log_buf + ret, tc_tune_code_size - ret, "\n");
+		ret += touch_snprintf(log_buf + ret, tc_tune_code_size - ret, "\n");
 		write_file(dev, log_buf, TIME_INFO_SKIP);
 
 		ret = 0;
 
-		ret = snprintf(log_buf, tc_tune_code_size,
+		ret = touch_snprintf(log_buf, tc_tune_code_size,
 				"GOFT right tune_code_read : ");
 		TOUCH_I("GOFT right tune_code_read : ");
 
-		ret += snprintf(log_buf + ret, tc_tune_code_size - ret, "\n");
+		ret += touch_snprintf(log_buf + ret, tc_tune_code_size - ret, "\n");
 		write_file(dev, log_buf, TIME_INFO_SKIP);
 		ret = 0;
 		ret += tune_goft_print(t->r_goft_tune_u3_m1m2_right,
 								log_buf, 2);
-		ret += snprintf(log_buf + ret, tc_tune_code_size - ret, "\n");
+		ret += touch_snprintf(log_buf + ret, tc_tune_code_size - ret, "\n");
 		write_file(dev, log_buf, TIME_INFO_SKIP);
 
 		ret = 0;
-		ret = snprintf(log_buf, tc_tune_code_size,
+		ret = touch_snprintf(log_buf, tc_tune_code_size,
 				"LOFT G1 left tune_code_read : ");
 		TOUCH_I("LOFT G1 left tune_code_read : ");
-		ret += snprintf(log_buf + ret, tc_tune_code_size - ret, "\n");
+		ret += touch_snprintf(log_buf + ret, tc_tune_code_size - ret, "\n");
 		printk("\n");
 		write_file(dev, log_buf, TIME_INFO_SKIP);
 		ret = 0;
 		ret += tune_loft_print(LOFT_CH_NUM, t->r_loft_tune_u3_m2_g1_left,
 								log_buf);
-		ret += snprintf(log_buf + ret, tc_tune_code_size - ret, "\n");
+		ret += touch_snprintf(log_buf + ret, tc_tune_code_size - ret, "\n");
 		printk("\n");
 		write_file(dev, log_buf, TIME_INFO_SKIP);
 
 		ret = 0;
 
-		ret = snprintf(log_buf, tc_tune_code_size,
+		ret = touch_snprintf(log_buf, tc_tune_code_size,
 				"LOFT G1 right tune_code_read : ");
 		TOUCH_I("LOFT G1 right tune_code_read : ");
-		ret += snprintf(log_buf + ret, tc_tune_code_size - ret, "\n");
+		ret += touch_snprintf(log_buf + ret, tc_tune_code_size - ret, "\n");
 		printk("\n");
 		write_file(dev, log_buf, TIME_INFO_SKIP);
 		ret = 0;
 		ret += tune_loft_print(LOFT_CH_NUM, t->r_loft_tune_u3_m2_g1_right,
 								log_buf);
-		ret += snprintf(log_buf + ret, tc_tune_code_size - ret, "\n");
+		ret += touch_snprintf(log_buf + ret, tc_tune_code_size - ret, "\n");
 		printk("\n");
 		write_file(dev, log_buf, TIME_INFO_SKIP);
 
 		ret = 0;
 
-		ret = snprintf(log_buf, tc_tune_code_size,
+		ret = touch_snprintf(log_buf, tc_tune_code_size,
 				"LOFT G2 left tune_code_read : ");
 		TOUCH_I("LOFT G2 left tune_code_read : ");
-		ret += snprintf(log_buf + ret, tc_tune_code_size - ret, "\n");
+		ret += touch_snprintf(log_buf + ret, tc_tune_code_size - ret, "\n");
 		printk("\n");
 		write_file(dev, log_buf, TIME_INFO_SKIP);
 		ret = 0;
 		ret += tune_loft_print(LOFT_CH_NUM, t->r_loft_tune_u3_m2_g2_left,
 								log_buf);
-		ret += snprintf(log_buf + ret, tc_tune_code_size - ret, "\n");
+		ret += touch_snprintf(log_buf + ret, tc_tune_code_size - ret, "\n");
 		printk("\n");
 		write_file(dev, log_buf, TIME_INFO_SKIP);
 
 		ret = 0;
 
-		ret = snprintf(log_buf, tc_tune_code_size,
+		ret = touch_snprintf(log_buf, tc_tune_code_size,
 				"LOFT G2 right tune_code_read : ");
 		TOUCH_I("LOFT G2 right tune_code_read : ");
-		ret += snprintf(log_buf + ret, tc_tune_code_size - ret, "\n");
+		ret += touch_snprintf(log_buf + ret, tc_tune_code_size - ret, "\n");
 		printk("\n");
 		write_file(dev, log_buf, TIME_INFO_SKIP);
 		ret = 0;
 		ret += tune_loft_print(LOFT_CH_NUM, t->r_loft_tune_u3_m2_g2_right,
 								log_buf);
-		ret += snprintf(log_buf + ret, tc_tune_code_size - ret, "\n");
+		ret += touch_snprintf(log_buf + ret, tc_tune_code_size - ret, "\n");
 		printk("\n");
 		write_file(dev, log_buf, TIME_INFO_SKIP);
 
 		ret = 0;
 
-		ret = snprintf(log_buf, tc_tune_code_size,
+		ret = touch_snprintf(log_buf, tc_tune_code_size,
 				"LOFT G3 left tune_code_read : ");
 		TOUCH_I("LOFT G3 left tune_code_read : ");
-		ret += snprintf(log_buf + ret, tc_tune_code_size - ret, "\n");
+		ret += touch_snprintf(log_buf + ret, tc_tune_code_size - ret, "\n");
 		printk("\n");
 		write_file(dev, log_buf, TIME_INFO_SKIP);
 		ret = 0;
 		ret += tune_loft_print(LOFT_CH_NUM, t->r_loft_tune_u3_m2_g3_left,
 								log_buf);
-		ret += snprintf(log_buf + ret, tc_tune_code_size - ret, "\n");
+		ret += touch_snprintf(log_buf + ret, tc_tune_code_size - ret, "\n");
 		printk("\n");
 		write_file(dev, log_buf, TIME_INFO_SKIP);
 
 		ret = 0;
 
-		ret = snprintf(log_buf, tc_tune_code_size,
+		ret = touch_snprintf(log_buf, tc_tune_code_size,
 				"LOFT G3 right tune_code_read : ");
 		TOUCH_I("LOFT G3 right tune_code_read : ");
-		ret += snprintf(log_buf + ret, tc_tune_code_size - ret, "\n");
+		ret += touch_snprintf(log_buf + ret, tc_tune_code_size - ret, "\n");
 		printk("\n");
 		write_file(dev, log_buf, TIME_INFO_SKIP);
 		ret = 0;
 		ret += tune_loft_print(LOFT_CH_NUM, t->r_loft_tune_u3_m2_g3_right,
 								log_buf);
-		ret += snprintf(log_buf + ret, tc_tune_code_size - ret, "\n");
+		ret += touch_snprintf(log_buf + ret, tc_tune_code_size - ret, "\n");
 		printk("\n");
 		write_file(dev, log_buf, TIME_INFO_SKIP);
 
@@ -1374,7 +1350,7 @@ static void tune_display(struct device *dev, struct tune_data_format *t, int typ
 
 static void read_tune_code(struct device *dev, u8 type)
 {
-	struct tune_data_format t;
+	struct tune_data_format t = {0, };
 
 	sw49410_reg_read(dev, tune_code_addr, &t,
 				sizeof(struct tune_data_format));
@@ -1420,10 +1396,10 @@ static int prd_rawdata_test(struct device *dev, u8 type)
 	result = prd_compare_rawdata(dev, type);
 
 	if (result != 0) {
-		ret = snprintf(w_buf + ret, BUF_SIZE - ret, "%s : Fail\n", test_name_str[type]);
+		ret = touch_snprintf(w_buf + ret, BUF_SIZE - ret, "%s : Fail\n", test_name_str[type]);
 		TOUCH_I("%s : Fail\n",test_name_str[type]);
 	} else {
-		ret = snprintf(w_buf + ret, BUF_SIZE - ret, "%s : Pass\n", test_name_str[type]);
+		ret = touch_snprintf(w_buf + ret, BUF_SIZE - ret, "%s : Pass\n", test_name_str[type]);
 		TOUCH_I("%s : Pass\n",test_name_str[type]);
 	}
 	write_file(dev, w_buf, TIME_INFO_SKIP);
@@ -1448,15 +1424,15 @@ static void ic_run_info_print(struct device *dev)
 
 	sw49410_reg_read(dev, info_date, (u8 *)&rdata, sizeof(rdata));
 
-	ret = snprintf(buffer, LOG_BUF_SIZE,
+	ret = touch_snprintf(buffer, LOG_BUF_SIZE,
 			"\n===== Production Info =====\n");
-	ret += snprintf(buffer + ret, LOG_BUF_SIZE - ret,
+	ret += touch_snprintf(buffer + ret, LOG_BUF_SIZE - ret,
 			"chip_rev : %x\n",
 			d->fw.revision);
-	ret += snprintf(buffer + ret, LOG_BUF_SIZE - ret,
+	ret += touch_snprintf(buffer + ret, LOG_BUF_SIZE - ret,
 			"date : 0x%X 0x%X\n",
 			rdata[0], rdata[1]);
-	ret += snprintf(buffer + ret, LOG_BUF_SIZE - ret,
+	ret += touch_snprintf(buffer + ret, LOG_BUF_SIZE - ret,
 			"date : %04d.%02d.%02d %02d:%02d:%02d Site%d\n\n",
 		rdata[0] & 0xFFFF, (rdata[0] >> 16 & 0xFF),
 		(rdata[0] >> 24 & 0xFF), rdata[1] & 0xFF,
@@ -1478,15 +1454,15 @@ static void firmware_version_log(struct device *dev)
 	if (boot_mode >= MINIOS_MFTS_FOLDER)
 		ret = sw49410_ic_info(dev);
 
-	ret = snprintf(buffer, LOG_BUF_SIZE,
+	ret = touch_snprintf(buffer, LOG_BUF_SIZE,
 			"======== Firmware Info ========\n");
-	ret += snprintf(buffer + ret, LOG_BUF_SIZE - ret,
+	ret += touch_snprintf(buffer + ret, LOG_BUF_SIZE - ret,
 			"version : v%d.%02d\n",
 			d->fw.version[0], d->fw.version[1]);
-	ret += snprintf(buffer + ret, LOG_BUF_SIZE - ret,
+	ret += touch_snprintf(buffer + ret, LOG_BUF_SIZE - ret,
 			"fpc : %d, lcm : %d, lot : %d\n",
 			d->fw.fpc, d->fw.lcm, d->fw.lot);
-	ret += snprintf(buffer + ret, LOG_BUF_SIZE - ret,
+	ret += touch_snprintf(buffer + ret, LOG_BUF_SIZE - ret,
 			"product id : %s\n", d->fw.product_id);
 
 	write_file(dev, buffer, TIME_INFO_SKIP);
@@ -1514,7 +1490,7 @@ static ssize_t show_sd(struct device *dev, char *buf)
 
 	/* LCD mode check */
 	if (d->lcd_mode != LCD_MODE_U3) {
-		ret = snprintf(buf + ret, PAGE_SIZE - ret, "LCD mode is not U3. Test Result : Fail\n");
+		ret = touch_snprintf(buf + ret, PAGE_SIZE - ret, "LCD mode is not U3. Test Result : Fail\n");
 		TOUCH_I("LCD mode is not U3. Test Result : Fail\n");
 		return ret;
 	}
@@ -1562,28 +1538,28 @@ static ssize_t show_sd(struct device *dev, char *buf)
 		u3_m2_delta_ret = prd_rawdata_test(dev, U3_M2_DELTA_TEST);
 	}
 
-	ret = snprintf(buf, PAGE_SIZE,
+	ret = touch_snprintf(buf, PAGE_SIZE,
 			"\n========RESULT=======\n");
 	if ((u3_m2_raw_ret+u3_m2_delta_ret) == 0) {
-		ret += snprintf(buf + ret, PAGE_SIZE - ret,
+		ret += touch_snprintf(buf + ret, PAGE_SIZE - ret,
 				"Raw Data : Pass\n");
 	} else {
-		ret += snprintf(buf + ret, PAGE_SIZE - ret,
+		ret += touch_snprintf(buf + ret, PAGE_SIZE - ret,
 				"Raw Data : Fail (%d / %d)\n",
 				u3_m2_raw_ret, u3_m2_delta_ret);
 	}
 
 	if (openshort_ret == 0) {
-		ret += snprintf(buf + ret, PAGE_SIZE - ret,
+		ret += touch_snprintf(buf + ret, PAGE_SIZE - ret,
 				"Channel Status : Pass\n");
 	} else {
-		ret += snprintf(buf + ret, PAGE_SIZE - ret,
+		ret += touch_snprintf(buf + ret, PAGE_SIZE - ret,
 			"Channel Status : Fail (open:%d/short:%d)\n",
 			((openshort_ret & 0x1) == 0x1) ? 1 : 0,
 			((openshort_ret & 0x2) == 0x2) ? 1 : 0);
 	}
 
-	ret += snprintf(buf + ret, PAGE_SIZE - ret,
+	ret += touch_snprintf(buf + ret, PAGE_SIZE - ret,
 				"=====================\n");
 
 	write_file(dev, buf, TIME_INFO_SKIP);
@@ -1939,7 +1915,7 @@ static struct siw_hal_prd_data *siw_hal_prd_alloc(struct device *dev)
 		goto out;
 	}
 
-	snprintf(prd->name, sizeof(prd->name)-1, "%s-prd", dev_name(dev));
+	touch_snprintf(prd->name, sizeof(prd->name)-1, "%s-prd", dev_name(dev));
 
 	prd->dev = ts->dev;
 
@@ -2066,7 +2042,7 @@ static ssize_t show_fdata(struct device *dev, char *buf)
 
 	/* LCD off */
 	if (d->lcd_mode != LCD_MODE_U3) {
-		ret = snprintf(buf + ret, PAGE_SIZE - ret,
+		ret = touch_snprintf(buf + ret, PAGE_SIZE - ret,
 				"LCD Off. Test Result : Fail\n");
 		return ret;
 	}
@@ -2124,7 +2100,7 @@ static ssize_t show_lpwg_sd(struct device *dev, char *buf)
 
 	/* LCD mode check */
 	if (d->lcd_mode != LCD_MODE_U0) {
-		ret = snprintf(buf + ret, PAGE_SIZE - ret,
+		ret = touch_snprintf(buf + ret, PAGE_SIZE - ret,
 			"LPWG Not Test. Turn off AOD and display.\n");
 		TOUCH_I("LCD mode is not U0. Test Result : Fail\n");
 		return ret;
@@ -2132,7 +2108,7 @@ static ssize_t show_lpwg_sd(struct device *dev, char *buf)
 
 	/* Deep sleep check */
 	if (atomic_read(&ts->state.sleep) == IC_DEEP_SLEEP) {
-		ret = snprintf(buf + ret, PAGE_SIZE - ret,
+		ret = touch_snprintf(buf + ret, PAGE_SIZE - ret,
 			"LPWG Not Test. IC state is Deep Sleep.\n");
 		TOUCH_I("LPWG Not Test. IC state is Deep Sleep.\n");
 		return ret;
@@ -2186,18 +2162,18 @@ static ssize_t show_lpwg_sd(struct device *dev, char *buf)
 		u0_m2_delta_ret = prd_rawdata_test(dev, U0_M2_DELTA_TEST);
 	}
 
-	ret = snprintf(buf + ret, PAGE_SIZE, "========RESULT=======\n");
+	ret = touch_snprintf(buf + ret, PAGE_SIZE, "========RESULT=======\n");
 
 	if (!u0_m1_raw_ret && !u0_m1_jitter_ret && !u0_m2_raw_ret && !u0_m2_delta_ret) {
-		ret += snprintf(buf + ret, PAGE_SIZE - ret,
+		ret += touch_snprintf(buf + ret, PAGE_SIZE - ret,
 			"LPWG RawData : Pass\n");
 	} else {
-		ret += snprintf(buf + ret, PAGE_SIZE - ret,
+		ret += touch_snprintf(buf + ret, PAGE_SIZE - ret,
 			"LPWG RawData : Fail (%d / %d / %d / %d)\n",
 			u0_m1_raw_ret, u0_m1_jitter_ret, u0_m2_raw_ret, u0_m2_delta_ret);
 	}
 
-	ret += snprintf(buf + ret, PAGE_SIZE - ret,
+	ret += touch_snprintf(buf + ret, PAGE_SIZE - ret,
 			"=====================\n");
 
 	write_file(dev, buf, TIME_INFO_SKIP);
@@ -2239,12 +2215,12 @@ static ssize_t read_delta(struct file *filp,
 			return ret;
 		}
 
-		ret = snprintf(kobj_log_buf_2, LOG_MAX_BUF, "======== Deltadata ========\n");
+		ret = touch_snprintf(kobj_log_buf_2, LOG_MAX_BUF, "======== Deltadata ========\n");
 
 		ret2 = get_data(ts->dev, delta, CMD_DELTADATA);
 		if (ret2 < 0) {
 			TOUCH_E("Test fail (Check if LCD is OFF)\n");
-			ret += snprintf(kobj_log_buf_2 + ret, LOG_MAX_BUF - ret, "Test fail (Check if LCD is OFF)\n");
+			ret += touch_snprintf(kobj_log_buf_2 + ret, LOG_MAX_BUF - ret, "Test fail (Check if LCD is OFF)\n");
 			goto error;
 		}
 
@@ -2252,16 +2228,16 @@ static ssize_t read_delta(struct file *filp,
 			char log_buf[LOG_BUF_SIZE] = {0,};
 			int ret3 = 0;
 
-			ret += snprintf(kobj_log_buf_2 + ret, LOG_MAX_BUF - ret, "[%2d]  ", i);
-			ret3 += snprintf(log_buf + ret3, LOG_BUF_SIZE - ret3, "[%2d]  ", i);
+			ret += touch_snprintf(kobj_log_buf_2 + ret, LOG_MAX_BUF - ret, "[%2d]  ", i);
+			ret3 += touch_snprintf(log_buf + ret3, LOG_BUF_SIZE - ret3, "[%2d]  ", i);
 
 			for (j = 0 ; j < COL_SIZE ; j++) {
-				ret += snprintf(kobj_log_buf_2 + ret, LOG_MAX_BUF - ret,
+				ret += touch_snprintf(kobj_log_buf_2 + ret, LOG_MAX_BUF - ret,
 						"%5d ", delta[i * COL_SIZE + j]);
-				ret3 += snprintf(log_buf + ret3, LOG_BUF_SIZE - ret3,
+				ret3 += touch_snprintf(log_buf + ret3, LOG_BUF_SIZE - ret3,
 						"%5d ", delta[i * COL_SIZE + j]);
 			}
-			ret += snprintf(kobj_log_buf_2 + ret, LOG_MAX_BUF - ret, "\n");
+			ret += touch_snprintf(kobj_log_buf_2 + ret, LOG_MAX_BUF - ret, "\n");
 			TOUCH_I("%s\n", log_buf);
 		}
 		kobj_log_buf_2[LOG_MAX_BUF-1] = '\n';
@@ -2303,12 +2279,12 @@ static ssize_t read_rawdata(struct file *filp,
 			return ret;
 		}
 
-		ret = snprintf(kobj_log_buf_2, LOG_MAX_BUF, "======== rawdata ========\n");
+		ret = touch_snprintf(kobj_log_buf_2, LOG_MAX_BUF, "======== rawdata ========\n");
 
 		ret2 = get_data(ts->dev, rawdata, CMD_RAWDATA);
 		if (ret2 < 0) {
 			TOUCH_E("Test fail (Check if LCD is OFF)\n");
-			ret += snprintf(kobj_log_buf_2 + ret, LOG_MAX_BUF - ret, "Test fail (Check if LCD is OFF)\n");
+			ret += touch_snprintf(kobj_log_buf_2 + ret, LOG_MAX_BUF - ret, "Test fail (Check if LCD is OFF)\n");
 			goto error;
 		}
 
@@ -2316,16 +2292,16 @@ static ssize_t read_rawdata(struct file *filp,
 			char log_buf[LOG_BUF_SIZE] = {0,};
 			int ret3 = 0;
 
-			ret += snprintf(kobj_log_buf_2 + ret, LOG_MAX_BUF - ret, "[%2d]  ", i);
-			ret3 += snprintf(log_buf + ret3, LOG_BUF_SIZE - ret3, "[%2d]  ", i);
+			ret += touch_snprintf(kobj_log_buf_2 + ret, LOG_MAX_BUF - ret, "[%2d]  ", i);
+			ret3 += touch_snprintf(log_buf + ret3, LOG_BUF_SIZE - ret3, "[%2d]  ", i);
 
 			for (j = 0 ; j < COL_SIZE ; j++) {
-				ret += snprintf(kobj_log_buf_2 + ret, LOG_MAX_BUF - ret,
+				ret += touch_snprintf(kobj_log_buf_2 + ret, LOG_MAX_BUF - ret,
 						"%5d ", rawdata[i * COL_SIZE + j]);
-				ret3 += snprintf(log_buf + ret3, LOG_BUF_SIZE - ret3,
+				ret3 += touch_snprintf(log_buf + ret3, LOG_BUF_SIZE - ret3,
 						"%5d ", rawdata[i * COL_SIZE + j]);
 			}
-			ret += snprintf(kobj_log_buf_2 + ret, LOG_MAX_BUF - ret, "\n");
+			ret += touch_snprintf(kobj_log_buf_2 + ret, LOG_MAX_BUF - ret, "\n");
 			TOUCH_I("%s\n", log_buf);
 		}
 		kobj_log_buf_2[LOG_MAX_BUF-1] = '\n';
@@ -2367,12 +2343,12 @@ static ssize_t read_base(struct file *filp,
 			return ret;
 		}
 
-		ret = snprintf(kobj_log_buf_2, LOG_MAX_BUF, "======== baseline ========\n");
+		ret = touch_snprintf(kobj_log_buf_2, LOG_MAX_BUF, "======== baseline ========\n");
 
 		ret2 = get_data(ts->dev, baseline, CMD_BASE_DATA);
 		if (ret2 < 0) {
 			TOUCH_E("Test fail (Check if LCD is OFF)\n");
-			ret += snprintf(kobj_log_buf_2 + ret, LOG_MAX_BUF - ret, "Test fail (Check if LCD is OFF)\n");
+			ret += touch_snprintf(kobj_log_buf_2 + ret, LOG_MAX_BUF - ret, "Test fail (Check if LCD is OFF)\n");
 			goto error;
 		}
 
@@ -2380,16 +2356,16 @@ static ssize_t read_base(struct file *filp,
 			char log_buf[LOG_BUF_SIZE] = {0,};
 			int ret3 = 0;
 
-			ret += snprintf(kobj_log_buf_2 + ret, LOG_MAX_BUF - ret, "[%2d]  ", i);
-			ret3 += snprintf(log_buf + ret3, LOG_BUF_SIZE - ret3, "[%2d]  ", i);
+			ret += touch_snprintf(kobj_log_buf_2 + ret, LOG_MAX_BUF - ret, "[%2d]  ", i);
+			ret3 += touch_snprintf(log_buf + ret3, LOG_BUF_SIZE - ret3, "[%2d]  ", i);
 
 			for (j = 0 ; j < COL_SIZE ; j++) {
-				ret += snprintf(kobj_log_buf_2 + ret, LOG_MAX_BUF - ret,
+				ret += touch_snprintf(kobj_log_buf_2 + ret, LOG_MAX_BUF - ret,
 						"%5d ", baseline[i * COL_SIZE + j]);
-				ret3 += snprintf(log_buf + ret3, LOG_BUF_SIZE - ret3,
+				ret3 += touch_snprintf(log_buf + ret3, LOG_BUF_SIZE - ret3,
 						"%5d ", baseline[i * COL_SIZE + j]);
 			}
-			ret += snprintf(kobj_log_buf_2 + ret, LOG_MAX_BUF - ret, "\n");
+			ret += touch_snprintf(kobj_log_buf_2 + ret, LOG_MAX_BUF - ret, "\n");
 			TOUCH_I("%s\n", log_buf);
 		}
 		kobj_log_buf_2[LOG_MAX_BUF-1] = '\n';
@@ -2431,12 +2407,12 @@ static ssize_t read_debug(struct file *filp,
 			return ret;
 		}
 
-		ret = snprintf(kobj_log_buf_2, LOG_MAX_BUF, "======== debugdata ========\n");
+		ret = touch_snprintf(kobj_log_buf_2, LOG_MAX_BUF, "======== debugdata ========\n");
 
 		ret2 = get_data(ts->dev, debugdata, CMD_DEBUGDATA);
 		if (ret2 < 0) {
 			TOUCH_E("Test fail (Check if LCD is OFF)\n");
-			ret += snprintf(kobj_log_buf_2 + ret, LOG_MAX_BUF - ret, "Test fail (Check if LCD is OFF)\n");
+			ret += touch_snprintf(kobj_log_buf_2 + ret, LOG_MAX_BUF - ret, "Test fail (Check if LCD is OFF)\n");
 			goto error;
 		}
 
@@ -2444,16 +2420,16 @@ static ssize_t read_debug(struct file *filp,
 			char log_buf[LOG_BUF_SIZE] = {0,};
 			int ret3 = 0;
 
-			ret += snprintf(kobj_log_buf_2 + ret, LOG_MAX_BUF - ret, "[%2d]  ", i);
-			ret3 += snprintf(log_buf + ret3, LOG_BUF_SIZE - ret3, "[%2d]  ", i);
+			ret += touch_snprintf(kobj_log_buf_2 + ret, LOG_MAX_BUF - ret, "[%2d]  ", i);
+			ret3 += touch_snprintf(log_buf + ret3, LOG_BUF_SIZE - ret3, "[%2d]  ", i);
 
 			for (j = 0 ; j < COL_SIZE ; j++) {
-				ret += snprintf(kobj_log_buf_2 + ret, LOG_MAX_BUF - ret,
+				ret += touch_snprintf(kobj_log_buf_2 + ret, LOG_MAX_BUF - ret,
 						"%5d ", debugdata[i * COL_SIZE + j]);
-				ret3 += snprintf(log_buf + ret3, LOG_BUF_SIZE - ret3,
+				ret3 += touch_snprintf(log_buf + ret3, LOG_BUF_SIZE - ret3,
 						"%5d ", debugdata[i * COL_SIZE + j]);
 			}
-			ret += snprintf(kobj_log_buf_2 + ret, LOG_MAX_BUF - ret, "\n");
+			ret += touch_snprintf(kobj_log_buf_2 + ret, LOG_MAX_BUF - ret, "\n");
 			TOUCH_I("%s\n", log_buf);
 		}
 		kobj_log_buf_2[LOG_MAX_BUF-1] = '\n';
@@ -2495,12 +2471,12 @@ static ssize_t read_labeldata(struct file *filp,
 			return ret;
 		}
 
-		ret = snprintf(kobj_log_buf_2, LOG_MAX_BUF, "======== labeldata ========\n");
+		ret = touch_snprintf(kobj_log_buf_2, LOG_MAX_BUF, "======== labeldata ========\n");
 
 		ret2 = get_data(ts->dev, label , CMD_LABELDATA);
 		if (ret2 < 0) {
 			TOUCH_E("Test fail (Check if LCD is OFF)\n");
-			ret += snprintf(kobj_log_buf_2 + ret, LOG_MAX_BUF - ret, "Test fail (Check if LCD is OFF)\n");
+			ret += touch_snprintf(kobj_log_buf_2 + ret, LOG_MAX_BUF - ret, "Test fail (Check if LCD is OFF)\n");
 			goto error;
 		}
 
@@ -2508,16 +2484,16 @@ static ssize_t read_labeldata(struct file *filp,
 			char log_buf[LOG_BUF_SIZE] = {0,};
 			int ret3 = 0;
 
-			ret += snprintf(kobj_log_buf_2 + ret, LOG_MAX_BUF - ret, "[%2d]  ", i);
-			ret3 += snprintf(log_buf + ret3, LOG_BUF_SIZE - ret3, "[%2d]  ", i);
+			ret += touch_snprintf(kobj_log_buf_2 + ret, LOG_MAX_BUF - ret, "[%2d]  ", i);
+			ret3 += touch_snprintf(log_buf + ret3, LOG_BUF_SIZE - ret3, "[%2d]  ", i);
 
 			for (j = 0 ; j < COL_SIZE ; j++) {
-				ret += snprintf(kobj_log_buf_2 + ret, LOG_MAX_BUF - ret,
+				ret += touch_snprintf(kobj_log_buf_2 + ret, LOG_MAX_BUF - ret,
 						"%5d ", label[i * COL_SIZE + j]);
-				ret3 += snprintf(log_buf + ret3, LOG_BUF_SIZE - ret3,
+				ret3 += touch_snprintf(log_buf + ret3, LOG_BUF_SIZE - ret3,
 						"%5d ", label[i * COL_SIZE + j]);
 			}
-			ret += snprintf(kobj_log_buf_2 + ret, LOG_MAX_BUF - ret, "\n");
+			ret += touch_snprintf(kobj_log_buf_2 + ret, LOG_MAX_BUF - ret, "\n");
 			TOUCH_I("%s\n", log_buf);
 		}
 		kobj_log_buf_2[LOG_MAX_BUF-1] = '\n';

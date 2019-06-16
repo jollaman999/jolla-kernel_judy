@@ -188,13 +188,6 @@ config MACH_SDM845_JUDYPN_LAO_COM
 	help
 	  Support for the Qualcomm SDM845 JUDYPN_LAO_COM device.
 
-config MACH_SDM845_JUDYPN_LAO_LDU
-        bool "SDM845 JUDYPN_LAO_LDU"
-        depends on ARCH_SDM845
-        select MACH_LGE
-        help
-          Support for the Qualcomm SDM845 JUDYPN_LAO_LDU device.
-
 config MACH_SDM845_JUDYPN_VZW
 	bool "SDM845 JUDYPN_VZW"
 	depends on ARCH_SDM845
@@ -264,6 +257,20 @@ config MACH_SDM845_JUDYP_SPR
 	select MACH_LGE
 	help
 	  Support for the Qualcomm SDM845 JUDYP_SPR device.
+
+config MACH_SDM845_BETA
+	bool "SDM845 BETA"
+	depends on ARCH_SDM845
+	select MACH_LGE
+	help
+	  Support for the Qualcomm SDM845 BETA device.
+
+config MACH_SDM845_BETA_LAO_COM
+	bool "SDM845 bETA_LAO_COM"
+	depends on ARCH_SDM845
+	select MACH_LGE
+	help
+	  Support for the Qualcomm SDM845 BETA_LAO_COM device.
 
 config LGE_BOOTLOADER_LOG
 	tristate "Support LGE bootloader log"
@@ -338,17 +345,17 @@ config LGE_QSDL_SUPPORT
 
 config LGE_PSTORE_BACKUP
 	tristate "Support pstore backup"
-	default y
+	default n
 	depends on MACH_LGE
 	help
 	  Ramoops region is backed up to pstore partition
 
 config LGE_PKM
-    tristate "Support PKM driver with QSEE"
-    depends on MACH_LGE
-    default n
-    help
-      Say Y here to enable Mobile Kernel Integrity driver for LG PKM
+        tristate "Support PKM driver with QSEE"
+        depends on MACH_LGE
+        default y
+        help
+          Say Y here to enable Mobile Kernel Integrity driver for LG PKM
 
 config LGE_ONE_BINARY_SKU
         tristate "Support LGE One binary sku carrier"
@@ -364,6 +371,20 @@ config LGE_MME_BUS
         help
           Say 'y' here to include support for the clock booster
           of msm bus to support LGE MME.
+
+config LGE_PAY_MME
+        tristate "Support WMC driver"
+        depends on MACH_LGE
+        default y
+        help
+          Say 'y' here to enable Wireless Magnetic Communication driver for LG pay
+
+config LGE_PAY_MME_TEST
+        tristate "Support WMC test"
+        depends on MACH_LGE
+        default n
+        help
+          Say 'y' here to enable Wireless Magnetic Communication test
 
 config LGE_DM_VERITY_RECOVERY
 	tristate "Support dm verity corrupt recovery"

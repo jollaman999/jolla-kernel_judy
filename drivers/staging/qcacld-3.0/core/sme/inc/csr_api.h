@@ -1,8 +1,5 @@
 /*
- * Copyright (c) 2011-2017 The Linux Foundation. All rights reserved.
- *
- * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
- *
+ * Copyright (c) 2011-2018 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -19,12 +16,6 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/*
- * This file was originally distributed by Qualcomm Atheros, Inc.
- * under proprietary terms before Copyright ownership was assigned
- * to the Linux Foundation.
- */
-
 /**
  *   \file csr_api.h
  *
@@ -39,6 +30,7 @@
 #include "csr_link_list.h"
 
 #define CSR_INVALID_SCANRESULT_HANDLE       (NULL)
+#define CSR_NUM_WLM_LATENCY_LEVEL   4
 
 typedef enum {
 	/* never used */
@@ -46,6 +38,7 @@ typedef enum {
 	/* MAC layer authentication types */
 	eCSR_AUTH_TYPE_OPEN_SYSTEM,
 	eCSR_AUTH_TYPE_SHARED_KEY,
+	eCSR_AUTH_TYPE_SAE,
 	eCSR_AUTH_TYPE_AUTOSWITCH,
 
 	/* Upper layer authentication types */
@@ -69,6 +62,10 @@ typedef enum {
 	eCSR_AUTH_TYPE_FILS_SHA384,
 	eCSR_AUTH_TYPE_FT_FILS_SHA256,
 	eCSR_AUTH_TYPE_FT_FILS_SHA384,
+	eCSR_AUTH_TYPE_OWE,
+	eCSR_AUTH_TYPE_SUITEB_EAP_SHA256,
+	eCSR_AUTH_TYPE_SUITEB_EAP_SHA384,
+	eCSR_AUTH_TYPE_DPP_RSN,
 	eCSR_NUM_OF_SUPPORT_AUTH_TYPE,
 	eCSR_AUTH_TYPE_FAILED = 0xff,
 	eCSR_AUTH_TYPE_UNKNOWN = eCSR_AUTH_TYPE_FAILED,
@@ -93,10 +90,9 @@ typedef enum {
 	eCSR_ENCRYPT_TYPE_BTK,
 #endif
 #endif /* FEATURE_WLAN_ESE */
-#ifdef WLAN_FEATURE_11W
-	/* 11w BIP */
 	eCSR_ENCRYPT_TYPE_AES_CMAC,
-#endif
+	eCSR_ENCRYPT_TYPE_AES_GMAC_128,
+	eCSR_ENCRYPT_TYPE_AES_GMAC_256,
 	eCSR_ENCRYPT_TYPE_AES_GCMP,
 	eCSR_ENCRYPT_TYPE_AES_GCMP_256,
 	eCSR_ENCRYPT_TYPE_ANY,
@@ -226,6 +222,8 @@ typedef enum {
 #define CSR_AES_KEY_LEN             16
 #define CSR_AES_GCMP_KEY_LEN        16
 #define CSR_AES_GCMP_256_KEY_LEN    32
+#define CSR_AES_GMAC_128_KEY_LEN    16
+#define CSR_AES_GMAC_256_KEY_LEN    32
 #define CSR_MAX_TX_POWER        (WNI_CFG_CURRENT_TX_POWER_LEVEL_STAMAX)
 #define CSR_MAX_RSC_LEN             16
 #ifdef FEATURE_WLAN_WAPI
@@ -297,10 +295,12 @@ typedef struct tagCsrScanRequest {
 	enum wmi_dwelltime_adaptive_mode scan_adaptive_dwell_mode;
 	eCsrRequestType requestType; /* 11d scan or full scan */
 	uint32_t scan_ctrl_flags_ext; /* Scan control flags extended */
+	uint32_t scan_flags;
 	bool p2pSearch;
 	bool skipDfsChnlInP2pSearch;
 	bool bcnRptReqScan;     /* is Scan issued by Beacon Report Request */
 	uint32_t scan_id;
+	uint32_t scan_requestor_id;
 	uint32_t timestamp;
 
 	bool enable_scan_randomization;
@@ -356,9 +356,8 @@ typedef struct tagCsrEseCckmInfo {
 #endif
 } tCsrEseCckmInfo;
 
-#define CSR_DOT11F_IE_RSN_MAX_LEN   (114)
 typedef struct tagCsrEseCckmIe {
-	uint8_t cckmIe[CSR_DOT11F_IE_RSN_MAX_LEN];
+	uint8_t cckmIe[DOT11F_IE_RSN_MAX_LEN];
 	uint8_t cckmIeLen;
 } tCsrEseCckmIe;
 #endif /* FEATURE_WLAN_ESE */
@@ -413,6 +412,7 @@ typedef struct tagCsrScanResultFilter {
 	struct sCsrChannel_ pcl_channels;
 	struct qdf_mac_addr bssid_hint;
 	enum tQDF_ADAPTER_MODE csrPersona;
+	bool ignore_pmf_cap;
 #ifdef WLAN_FEATURE_FILS_SK
 	bool realm_check;
 	uint8_t fils_realm[2];
@@ -538,6 +538,7 @@ typedef enum {
 	eCSR_ROAM_START,
 	eCSR_ROAM_ABORT,
 	eCSR_ROAM_NAPI_OFF,
+	eCSR_ROAM_SAE_COMPUTE,
 } eRoamCmdStatus;
 
 /* comment inside indicates what roaming callback gets */
@@ -647,6 +648,7 @@ typedef enum {
 	eCSR_ROAM_RESULT_NDP_END_RSP,
 	eCSR_ROAM_RESULT_NDP_PEER_DEPARTED_IND,
 	eCSR_ROAM_RESULT_NDP_END_IND,
+	eCSR_ROAM_RESULT_NDP_SCH_UPDATE_IND,
 	/* If Scan for SSID failed to found proper BSS */
 	eCSR_ROAM_RESULT_SCAN_FOR_SSID_FAILURE,
 	eCSR_ROAM_RESULT_INVOKE_FAILED,
@@ -777,6 +779,8 @@ typedef enum {
  */
 #define CSR_CB_CHANNEL_GAP 4
 #define CSR_CB_CENTER_CHANNEL_OFFSET    2
+#define CSR_SEC_CHANNEL_OFFSET    4
+
 
 /* WEP keysize (in bits) */
 typedef enum {
@@ -935,6 +939,7 @@ typedef struct tagCsrRoamProfile {
 	uint8_t MFPRequired;
 	uint8_t MFPCapable;
 #endif
+	tAniEdType mgmt_encryption_type;
 	tCsrKeys Keys;
 	tCsrChannelInfo ChannelInfo;
 	uint8_t operationChannel;
@@ -998,13 +1003,14 @@ typedef struct tagCsrRoamProfile {
 	struct qdf_mac_addr bssid_hint;
 	bool force_24ghz_in_ht20;
 	bool supplicant_disabled_roaming;
-	bool roaming_allowed_on_iface;
+	bool driver_disabled_roaming;
 #ifdef WLAN_FEATURE_FILS_SK
 	bool fils_connection;
 	uint8_t *hlp_ie;
 	uint32_t hlp_ie_len;
 	struct cds_fils_connection_info *fils_con_info;
 #endif
+	bool force_rsne_override;
 } tCsrRoamProfile;
 
 #ifdef FEATURE_WLAN_MCC_TO_SCC_SWITCH
@@ -1122,6 +1128,32 @@ struct csr_sta_roam_policy_params {
 	enum sta_roam_policy_dfs_mode dfs_mode;
 	bool skip_unsafe_channels;
 	uint8_t sap_operating_band;
+};
+
+/**
+ * struct csr_neighbor_report_offload_params - neighbor report offload params
+ * @params_bitmask: bitmask to specify which of the below are enabled
+ * @time_offset: time offset after 11k offload command to trigger a neighbor
+ *		report request (in seconds)
+ * @low_rssi_offset: Offset from rssi threshold to trigger neighbor
+ *	report request (in dBm)
+ * @bmiss_count_trigger: Number of beacon miss events to trigger neighbor
+ *		report request
+ * @per_threshold_offset: offset from PER threshold to trigger neighbor
+ *		report request (in %)
+ * @neighbor_report_cache_timeout: timeout after which new trigger can enable
+ *		sending of a neighbor report request (in seconds)
+ * @max_neighbor_report_req_cap: max number of neighbor report requests that
+ *		can be sent to the peer in the current session
+ */
+struct csr_neighbor_report_offload_params {
+	uint8_t params_bitmask;
+	uint32_t time_offset;
+	uint32_t low_rssi_offset;
+	uint32_t bmiss_count_trigger;
+	uint32_t per_threshold_offset;
+	uint32_t neighbor_report_cache_timeout;
+	uint32_t max_neighbor_report_req_cap;
 };
 
 typedef struct tagCsrConfigParam {
@@ -1242,6 +1274,7 @@ typedef struct tagCsrConfigParam {
 	bool fScanTwice;
 	uint32_t nVhtChannelWidth;
 	uint8_t enableTxBF;
+	bool enable_subfee_vendor_vhtie;
 	uint8_t enable_txbf_sap_mode;
 	uint8_t enable2x2;
 	bool enableVhtFor24GHz;
@@ -1273,6 +1306,11 @@ typedef struct tagCsrConfigParam {
 	bool enable_vht20_mcs9;
 	uint8_t max_amsdu_num;
 	uint8_t nSelect5GHzMargin;
+	uint32_t ho_delay_for_rx;
+	uint32_t roam_preauth_retry_count;
+	uint32_t roam_preauth_no_ack_timeout;
+	uint32_t min_delay_btw_roam_scans;
+	uint32_t roam_trigger_reason_bitmask;
 	uint8_t isCoalesingInIBSSAllowed;
 #ifdef FEATURE_WLAN_MCC_TO_SCC_SWITCH
 	uint8_t cc_switch_mode;
@@ -1307,6 +1345,10 @@ typedef struct tagCsrConfigParam {
 	bool enable5gEBT;
 	bool enableSelfRecovery;
 	uint32_t f_sta_miracast_mcc_rest_time_val;
+	uint32_t sta_scan_burst_duration;
+	uint32_t p2p_scan_burst_duration;
+	uint32_t go_scan_burst_duration;
+	uint32_t ap_scan_burst_duration;
 #ifdef FEATURE_AP_MCC_CH_AVOIDANCE
 	bool sap_channel_avoidance;
 #endif /* FEATURE_AP_MCC_CH_AVOIDANCE */
@@ -1341,10 +1383,19 @@ typedef struct tagCsrConfigParam {
 	uint32_t edca_be_aifs;
 	bool enable_fatal_event;
 	enum wmi_dwelltime_adaptive_mode scan_adaptive_dwell_mode;
+	enum wmi_dwelltime_adaptive_mode scan_adaptive_dwell_mode_nc;
 	enum wmi_dwelltime_adaptive_mode roamscan_adaptive_dwell_mode;
 	struct csr_sta_roam_policy_params sta_roam_policy_params;
 	uint32_t tx_aggregation_size;
+	uint32_t tx_aggregation_size_be;
+	uint32_t tx_aggregation_size_bk;
+	uint32_t tx_aggregation_size_vi;
+	uint32_t tx_aggregation_size_vo;
 	uint32_t rx_aggregation_size;
+	uint32_t tx_aggr_sw_retry_threshold_be;
+	uint32_t tx_aggr_sw_retry_threshold_bk;
+	uint32_t tx_aggr_sw_retry_threshold_vi;
+	uint32_t tx_aggr_sw_retry_threshold_vo;
 	struct wmi_per_roam_config per_roam_config;
 	bool enable_bcast_probe_rsp;
 	bool is_fils_enabled;
@@ -1360,8 +1411,15 @@ typedef struct tagCsrConfigParam {
 	uint32_t num_disallowed_aps;
 	uint32_t scan_probe_repeat_time;
 	uint32_t scan_num_probes;
+	uint16_t wlm_latency_enable;
+	uint16_t wlm_latency_level;
+	uint32_t wlm_latency_flags[CSR_NUM_WLM_LATENCY_LEVEL];
 	struct sir_score_config bss_score_params;
 	uint8_t oce_feature_bitmap;
+	uint32_t offload_11k_enable_bitmask;
+	struct csr_neighbor_report_offload_params neighbor_report_offload;
+	bool enable_ftopen;
+	bool roam_force_rssi_trigger;
 } tCsrConfigParam;
 
 /* Tush */
@@ -1408,6 +1466,7 @@ typedef struct tagCsrRoamInfo {
 	tSirResultCodes statusCode;
 	/* this'd be our own defined or sent from otherBSS(per 802.11spec) */
 	uint32_t reasonCode;
+	uint8_t disassoc_reason;
 	uint8_t staId;         /* Peer stationId when connected */
 	/*
 	 * The DPU signatures will be sent eventually to TL to help it
@@ -1490,6 +1549,7 @@ typedef struct tagCsrRoamInfo {
 		struct ndp_initiator_rsp ndp_init_rsp_params;
 		struct ndi_create_rsp ndi_create_params;
 		struct ndi_delete_rsp ndi_delete_params;
+		struct ndp_sch_update_event sch_update_params;
 	} ndp;
 #endif
 	tDot11fIEHTCaps ht_caps;
@@ -1516,6 +1576,14 @@ typedef struct tagCsrRoamInfo {
 #ifdef WLAN_FEATURE_FILS_SK
 	struct fils_join_rsp_params *fils_join_rsp;
 #endif
+#ifdef WLAN_FEATURE_SAE
+	struct sir_sae_info *sae_info;
+#endif
+	int rssi;
+	int tx_rate;
+	int rx_rate;
+	tSirMacCapabilityInfo capability_info;
+	uint32_t rx_mc_bc_cnt;
 } tCsrRoamInfo;
 
 typedef struct tagCsrFreqScanInfo {
@@ -1559,6 +1627,7 @@ typedef struct sSirSmeAssocIndToUpperLayerCnf {
 
 	tDot11fIEHTCaps HTCaps;
 	tDot11fIEVHTCaps VHTCaps;
+	tSirMacCapabilityInfo capability_info;
 } tSirSmeAssocIndToUpperLayerCnf, *tpSirSmeAssocIndToUpperLayerCnf;
 
 typedef struct tagCsrSummaryStatsInfo {
@@ -1763,6 +1832,20 @@ typedef QDF_STATUS (*csr_roamSessionCloseCallback)(void *pContext);
 		(eCSR_AUTH_TYPE_FILS_SHA384 == auth_type) || \
 		(eCSR_AUTH_TYPE_FT_FILS_SHA256 == auth_type) || \
 		(eCSR_AUTH_TYPE_FT_FILS_SHA384 == auth_type))
+
+#ifdef WLAN_FEATURE_OWE
+#define CSR_IS_AUTH_TYPE_OWE(auth_type) \
+	(eCSR_AUTH_TYPE_OWE == auth_type)
+#else
+#define CSR_IS_AUTH_TYPE_OWE(auth_type) (false)
+#endif
+
+#ifdef WLAN_FEATURE_SAE
+#define CSR_IS_AUTH_TYPE_SAE(auth_type) \
+	(eCSR_AUTH_TYPE_SAE == auth_type)
+#else
+#define CSR_IS_AUTH_TYPE_SAE(auth_type) (false)
+#endif
 
 QDF_STATUS csr_set_channels(tHalHandle hHal, tCsrConfigParam *pParam);
 

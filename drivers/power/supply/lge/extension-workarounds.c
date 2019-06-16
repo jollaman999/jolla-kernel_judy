@@ -750,6 +750,10 @@ void workaround_force_incompatible_hvdcp_require(void) {
 	workaround_force_incompatible_hvdcp_required = true;
 }
 
+bool workaround_force_incompatible_hvdcp_is_running(void) {
+	return workaround_force_incompatible_hvdcp_running;
+}
+
 
 ////////////////////////////////////////////////////////////////////////////
 // LGE Workaround : Skip uevent for supplementary battery
@@ -980,6 +984,10 @@ static void workaround_check_unknown_cable_main(struct work_struct *unused) {
 	bool	vbus_present = false;
 	union power_supply_propval val = { 0, };
 
+	if (!chg) {
+		pr_info("[W/A] CUC) 'chg' is not ready\n");
+		return;
+	}
 	rc = smblib_write(chg, USBIN_ADAPTER_ALLOW_CFG_REG, USBIN_ADAPTER_ALLOW_5V);
 	if (rc < 0) {
 		pr_info("[W/A] CUC) Couldn't write 0x%02x to USBIN_ADAPTER_ALLOW_CFG rc=%d\n",
@@ -1015,19 +1023,20 @@ void workaround_check_unknown_cable(struct smb_charger *chg) {
 
 	if (!chg->pd_hard_reset
 		&& !smblib_get_prop_usb_present(chg, &val)
-		&& val.intval != false
+		&& (val.intval != false)
 		&& !smblib_read(chg, APSD_STATUS_REG, &stat)
 		&& (stat & APSD_DTC_STATUS_DONE_BIT)
-		&& chg->real_charger_type == POWER_SUPPLY_TYPE_UNKNOWN
+		&& (chg->real_charger_type == POWER_SUPPLY_TYPE_UNKNOWN)
+		&& !(chg->typec_status[3] & UFP_DFP_MODE_STATUS_BIT)
 		&& !power_supply_get_property(chg->usb_psy, POWER_SUPPLY_PROP_MOISTURE_DETECTED, &val)
-		&& val.intval != true) {
+		&& (val.intval != true)) {
 		pr_debug("[W/A] CUC) APSD: 0x%02x, real_charger_type: %d\n",
 				stat, chg->real_charger_type);
 		schedule_delayed_work(&workaround_check_unknown_cable_dwork,
 				round_jiffies_relative(0));
 	}
 	else {
-		pr_info("[W/A] CUC) workaround_check_unknown_cable skip\n");
+		pr_debug("[W/A] CUC) workaround_check_unknown_cable skip\n");
 	}
 }
 

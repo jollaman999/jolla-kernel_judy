@@ -292,7 +292,7 @@ static int lge_drs_mngr_get_main_display(struct lge_drs_mngr *drs_mngr)
 	if (!drs_mngr)
 		return -EINVAL;
 
-	addr = (unsigned int **)kallsyms_lookup_name("main_display");
+	addr = (unsigned int **)kallsyms_lookup_name("primary_display");
 	if (addr) {
 		drs_mngr->main_display = (struct dsi_display *)*addr;
 	} else {

@@ -33,4 +33,5 @@
 #include "sdm845-judyp_vzw-fingerprint.dtsi"
 #include "sdm845-judyp_vzw-usb.dtsi"
 #include "sdm845-judyp_vzw-storage.dtsi"
+#include "sdm845-judyp_vzw-pkm.dtsi"
 

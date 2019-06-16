@@ -32,4 +32,5 @@
 #include "sdm845-judyp_kr-fingerprint.dtsi"
 #include "sdm845-judyp_kr-usb.dtsi"
 #include "sdm845-judyp_kr-storage.dtsi"
+#include "sdm845-judyp_kr-pkm.dtsi"
 

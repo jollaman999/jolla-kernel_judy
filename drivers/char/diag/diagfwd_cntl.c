@@ -25,9 +25,8 @@
 #include "diag_ipc_logging.h"
 #include "diag_mux.h"
 
-#if defined(CONFIG_LGE_USB_DIAG_LOCK_SPR) || defined(CONFIG_LGE_ONE_BINARY_SKU)
+#ifdef CONFIG_LGE_USB_DIAG_LOCK_SPR
 #include "diag_lock.h"
-#include <soc/qcom/lge/board_lge.h>
 #endif
 
 #define FEATURE_SUPPORTED(x)	((feature_mask << (i * 8)) & (1 << x))
@@ -50,8 +49,11 @@ static void diag_mask_update_work_fn(struct work_struct *work)
 
 void diag_cntl_channel_open(struct diagfwd_info *p_info)
 {
-	if (!p_info)
+	if (!p_info) {
+		DIAG_LOG(DIAG_DEBUG_PERIPHERALS,
+		"diag: Invalid fwd_info structure\n");
 		return;
+	}
 	driver->mask_update |= PERIPHERAL_MASK(p_info->peripheral);
 	queue_work(driver->cntl_wq, &driver->mask_update_work);
 	diag_notify_md_client(p_info->peripheral, DIAG_STATUS_OPEN);
@@ -61,12 +63,18 @@ void diag_cntl_channel_close(struct diagfwd_info *p_info)
 {
 	uint8_t peripheral;
 
-	if (!p_info)
+	if (!p_info) {
+		DIAG_LOG(DIAG_DEBUG_PERIPHERALS,
+		"diag: Invalid fwd_info structure\n");
 		return;
+	}
 
 	peripheral = p_info->peripheral;
-	if (peripheral >= NUM_PERIPHERALS)
+	if (peripheral >= NUM_PERIPHERALS) {
+		DIAG_LOG(DIAG_DEBUG_PERIPHERALS,
+			"diag: Invalid peripheral (%d)\n", peripheral);
 		return;
+	}
 
 	driver->feature[peripheral].sent_feature_mask = 0;
 	driver->feature[peripheral].rcvd_feature_mask = 0;
@@ -92,8 +100,11 @@ static void diag_stm_update_work_fn(struct work_struct *work)
 	driver->stm_peripheral = 0;
 	mutex_unlock(&driver->cntl_lock);
 
-	if (peripheral_mask == 0)
+	if (peripheral_mask == 0) {
+		DIAG_LOG(DIAG_DEBUG_PERIPHERALS,
+			"diag: Empty Peripheral mask\n");
 		return;
+	}
 
 	for (i = 0; i < NUM_PERIPHERALS; i++) {
 		if (!driver->feature[i].stm_support)
@@ -116,11 +127,18 @@ void diag_notify_md_client(uint8_t peripheral, int data)
 	struct pid *pid_struct;
 	struct task_struct *result;
 
-	if (peripheral > NUM_PERIPHERALS)
+	if (peripheral > NUM_PERIPHERALS) {
+		DIAG_LOG(DIAG_DEBUG_PERIPHERALS,
+			"diag: Invalid peripheral (%d)\n", peripheral);
 		return;
+	}
 
-	if (driver->logging_mode != DIAG_MEMORY_DEVICE_MODE)
+	if (driver->logging_mode != DIAG_MEMORY_DEVICE_MODE) {
+		DIAG_LOG(DIAG_DEBUG_PERIPHERALS,
+			"diag: Invalid logging_mode (%d)\n",
+			driver->logging_mode);
 		return;
+	}
 
 	mutex_lock(&driver->md_session_lock);
 	memset(&info, 0, sizeof(struct siginfo));
@@ -176,8 +194,12 @@ static void process_pd_status(uint8_t *buf, uint32_t len,
 	uint32_t pd;
 	int status = DIAG_STATUS_CLOSED;
 
-	if (!buf || peripheral >= NUM_PERIPHERALS || len < sizeof(*pd_msg))
+	if (!buf || peripheral >= NUM_PERIPHERALS || len < sizeof(*pd_msg)) {
+		DIAG_LOG(DIAG_DEBUG_PERIPHERALS,
+		"diag: Invalid parameters:(!buf) = %d, peripheral = %d, len = %d, pd_msg_len = %d\n",
+		!buf, peripheral, len, (int)sizeof(*pd_msg));
 		return;
+	}
 
 	pd_msg = (struct diag_ctrl_msg_pd_status *)buf;
 	pd = pd_msg->pd_id;
@@ -187,8 +209,11 @@ static void process_pd_status(uint8_t *buf, uint32_t len,
 
 static void enable_stm_feature(uint8_t peripheral)
 {
-	if (peripheral >= NUM_PERIPHERALS)
+	if (peripheral >= NUM_PERIPHERALS) {
+		DIAG_LOG(DIAG_DEBUG_PERIPHERALS,
+		"diag: Invalid peripheral (%d)\n", peripheral);
 		return;
+	}
 
 	mutex_lock(&driver->cntl_lock);
 	driver->feature[peripheral].stm_support = ENABLE_STM;
@@ -200,8 +225,11 @@ static void enable_stm_feature(uint8_t peripheral)
 
 static void enable_socket_feature(uint8_t peripheral)
 {
-	if (peripheral >= NUM_PERIPHERALS)
+	if (peripheral >= NUM_PERIPHERALS) {
+		DIAG_LOG(DIAG_DEBUG_PERIPHERALS,
+		"diag: Invalid peripheral (%d)\n", peripheral);
 		return;
+	}
 
 	if (driver->supports_sockets)
 		driver->feature[peripheral].sockets_enabled = 1;
@@ -211,8 +239,11 @@ static void enable_socket_feature(uint8_t peripheral)
 
 static void process_hdlc_encoding_feature(uint8_t peripheral)
 {
-	if (peripheral >= NUM_PERIPHERALS)
+	if (peripheral >= NUM_PERIPHERALS) {
+		DIAG_LOG(DIAG_DEBUG_PERIPHERALS,
+		"diag: Invalid peripheral (%d)\n", peripheral);
 		return;
+	}
 
 	if (driver->supports_apps_hdlc_encoding) {
 		driver->feature[peripheral].encode_hdlc =
@@ -225,8 +256,11 @@ static void process_hdlc_encoding_feature(uint8_t peripheral)
 
 static void process_upd_header_untagging_feature(uint8_t peripheral)
 {
-	if (peripheral >= NUM_PERIPHERALS)
+	if (peripheral >= NUM_PERIPHERALS) {
+		DIAG_LOG(DIAG_DEBUG_PERIPHERALS,
+		"diag: Invalid peripheral (%d)\n", peripheral);
 		return;
+	}
 
 	if (driver->supports_apps_header_untagging) {
 		driver->feature[peripheral].untag_header =
@@ -252,8 +286,16 @@ static void process_command_deregistration(uint8_t *buf, uint32_t len,
 	 * Perform Basic sanity. The len field is the size of the data payload.
 	 * This doesn't include the header size.
 	 */
-	if (!buf || peripheral >= NUM_PERIPHERALS || len == 0)
+	if (!buf || peripheral >= NUM_PERIPHERALS || len == 0) {
+		DIAG_LOG(DIAG_DEBUG_PERIPHERALS,
+		"diag: Invalid parameters:(!buf) = %d, peripheral = %d, len = %d\n",
+		!buf, peripheral, len);
 		return;
+	}
+
+	DIAG_LOG(DIAG_DEBUG_CONTROL,
+		"diag:peripheral(%d) command deregistration packet processing started\n",
+		peripheral);
 
 	dereg = (struct diag_ctrl_cmd_dereg *)ptr;
 	ptr += header_len;
@@ -261,8 +303,8 @@ static void process_command_deregistration(uint8_t *buf, uint32_t len,
 	read_len += header_len - (2 * sizeof(uint32_t));
 
 	if (dereg->count_entries == 0) {
-		pr_debug("diag: In %s, received reg tbl with no entries\n",
-			 __func__);
+		DIAG_LOG(DIAG_DEBUG_PERIPHERALS,
+			"diag: received reg tbl with no entries\n");
 		return;
 	}
 
@@ -281,6 +323,9 @@ static void process_command_deregistration(uint8_t *buf, uint32_t len,
 		pr_err("diag: In %s, reading less than available, read_len: %d, len: %d count: %d\n",
 		       __func__, read_len, len, dereg->count_entries);
 	}
+	DIAG_LOG(DIAG_DEBUG_CONTROL,
+		"diag:peripheral(%d) command deregistration packet processing complete\n",
+		peripheral);
 }
 static void process_command_registration(uint8_t *buf, uint32_t len,
 					 uint8_t peripheral)
@@ -297,8 +342,15 @@ static void process_command_registration(uint8_t *buf, uint32_t len,
 	 * Perform Basic sanity. The len field is the size of the data payload.
 	 * This doesn't include the header size.
 	 */
-	if (!buf || peripheral >= NUM_PERIPHERALS || len == 0)
+	if (!buf || peripheral >= NUM_PERIPHERALS || len == 0) {
+		DIAG_LOG(DIAG_DEBUG_PERIPHERALS,
+		"diag: Invalid parameters:(!buf) = %d, peripheral = %d, len = %d\n",
+		!buf, peripheral, len);
 		return;
+	}
+	DIAG_LOG(DIAG_DEBUG_CONTROL,
+		"diag: peripheral(%d) command registration packet processing started\n",
+		peripheral);
 
 	reg = (struct diag_ctrl_cmd_reg *)ptr;
 	ptr += header_len;
@@ -306,7 +358,8 @@ static void process_command_registration(uint8_t *buf, uint32_t len,
 	read_len += header_len - (2 * sizeof(uint32_t));
 
 	if (reg->count_entries == 0) {
-		pr_debug("diag: In %s, received reg tbl with no entries\n",
+		DIAG_LOG(DIAG_DEBUG_PERIPHERALS,
+			"diag: In %s, received reg tbl with no entries\n",
 			 __func__);
 		return;
 	}
@@ -326,6 +379,9 @@ static void process_command_registration(uint8_t *buf, uint32_t len,
 		pr_err("diag: In %s, reading less than available, read_len: %d, len: %d count: %d\n",
 		       __func__, read_len, len, reg->count_entries);
 	}
+	DIAG_LOG(DIAG_DEBUG_CONTROL,
+		"diag: peripheral(%d) command registration packet processing complete\n",
+		peripheral);
 }
 
 static void diag_close_transport_work_fn(struct work_struct *work)
@@ -338,8 +394,13 @@ static void diag_close_transport_work_fn(struct work_struct *work)
 		if (!(driver->close_transport & PERIPHERAL_MASK(peripheral)))
 			continue;
 		driver->close_transport ^= PERIPHERAL_MASK(peripheral);
+#ifdef CONFIG_DIAG_USES_SMD
+		transport = driver->feature[peripheral].sockets_enabled ?
+					TRANSPORT_SMD : TRANSPORT_SOCKET;
+#else
 		transport = driver->feature[peripheral].sockets_enabled ?
 					TRANSPORT_GLINK : TRANSPORT_SOCKET;
+#endif
 		diagfwd_close_transport(transport, peripheral);
 	}
 	mutex_unlock(&driver->cntl_lock);
@@ -347,8 +408,11 @@ static void diag_close_transport_work_fn(struct work_struct *work)
 
 static void process_socket_feature(uint8_t peripheral)
 {
-	if (peripheral >= NUM_PERIPHERALS)
+	if (peripheral >= NUM_PERIPHERALS) {
+		DIAG_LOG(DIAG_DEBUG_PERIPHERALS,
+		"diag: Invalid peripheral (%d)\n", peripheral);
 		return;
+	}
 
 	mutex_lock(&driver->cntl_lock);
 	driver->close_transport |= PERIPHERAL_MASK(peripheral);
@@ -379,15 +443,20 @@ static void process_incoming_feature_mask(uint8_t *buf, uint32_t len,
 	uint32_t feature_mask = 0;
 	uint8_t *ptr = buf;
 
-	if (!buf || peripheral >= NUM_PERIPHERALS || len == 0)
+	if (!buf || peripheral >= NUM_PERIPHERALS || len == 0) {
+		DIAG_LOG(DIAG_DEBUG_PERIPHERALS,
+		"diag: Invalid parameters:(!buf) = %d, peripheral = %d, len = %d\n",
+		!buf, peripheral, len);
 		return;
+	}
 
 	header = (struct diag_ctrl_feature_mask *)ptr;
 	ptr += header_len;
 	feature_mask_len = header->feature_mask_len;
 
 	if (feature_mask_len == 0) {
-		pr_debug("diag: In %s, received invalid feature mask from peripheral %d\n",
+		DIAG_LOG(DIAG_DEBUG_PERIPHERALS,
+			"diag: In %s, received invalid feature mask from peripheral %d\n",
 			 __func__, peripheral);
 		return;
 	}
@@ -400,6 +469,8 @@ static void process_incoming_feature_mask(uint8_t *buf, uint32_t len,
 	diag_cmd_remove_reg_by_proc(peripheral);
 
 	driver->feature[peripheral].rcvd_feature_mask = 1;
+	DIAG_LOG(DIAG_DEBUG_CONTROL,
+	"diag: Received feature mask for peripheral %d\n", peripheral);
 
 	for (i = 0; i < feature_mask_len && read_len < len; i++) {
 		feature_mask = *(uint8_t *)ptr;
@@ -431,6 +502,10 @@ static void process_incoming_feature_mask(uint8_t *buf, uint32_t len,
 
 	process_socket_feature(peripheral);
 	process_log_on_demand_feature(peripheral);
+
+	DIAG_LOG(DIAG_DEBUG_CONTROL,
+		"diag: Peripheral(%d) feature mask is processed\n",
+		peripheral);
 }
 
 static void process_last_event_report(uint8_t *buf, uint32_t len,
@@ -442,8 +517,16 @@ static void process_last_event_report(uint8_t *buf, uint32_t len,
 	uint32_t pkt_len = sizeof(uint32_t) + sizeof(uint16_t);
 	uint16_t event_size = 0;
 
-	if (!buf || peripheral >= NUM_PERIPHERALS || len != pkt_len)
+	if (!buf || peripheral >= NUM_PERIPHERALS || len != pkt_len) {
+		DIAG_LOG(DIAG_DEBUG_PERIPHERALS,
+		"diag: Invalid parameters:(!buf) = %d, peripheral = %d, len = %d, pkt_len = %d\n",
+		!buf, peripheral, len, pkt_len);
 		return;
+	}
+
+	DIAG_LOG(DIAG_DEBUG_CONTROL,
+		"diag:started processing last event report for peripheral (%d)\n",
+		peripheral);
 
 	mutex_lock(&event_mask.lock);
 	header = (struct diag_ctrl_last_event_report *)ptr;
@@ -467,6 +550,9 @@ static void process_last_event_report(uint8_t *buf, uint32_t len,
 		driver->last_event_id = header->event_last_id;
 err:
 	mutex_unlock(&event_mask.lock);
+	DIAG_LOG(DIAG_DEBUG_CONTROL,
+		"diag: last event report processed for peripheral (%d)\n",
+		peripheral);
 }
 
 static void process_log_range_report(uint8_t *buf, uint32_t len,
@@ -480,8 +566,15 @@ static void process_log_range_report(uint8_t *buf, uint32_t len,
 	struct diag_ctrl_log_range *log_range = NULL;
 	struct diag_log_mask_t *mask_ptr = NULL;
 
-	if (!buf || peripheral >= NUM_PERIPHERALS || len < 0)
+	if (!buf || peripheral >= NUM_PERIPHERALS || len < 0) {
+		DIAG_LOG(DIAG_DEBUG_PERIPHERALS,
+		"diag: Invalid parameters:(!buf) = %d, peripheral = %d, len = %d\n",
+		!buf, peripheral, len);
 		return;
+	}
+	DIAG_LOG(DIAG_DEBUG_CONTROL,
+		"diag:started processing log range report for peripheral(%d)\n",
+		peripheral);
 
 	header = (struct diag_ctrl_log_range_report *)ptr;
 	ptr += header_len;
@@ -507,6 +600,9 @@ static void process_log_range_report(uint8_t *buf, uint32_t len,
 		mask_ptr->range = LOG_ITEMS_TO_SIZE(log_range->num_items);
 		mutex_unlock(&(mask_ptr->lock));
 	}
+	DIAG_LOG(DIAG_DEBUG_CONTROL,
+		"diag: log range report processed for peripheral (%d)\n",
+		peripheral);
 }
 
 static int update_msg_mask_tbl_entry(struct diag_msg_mask_t *mask,
@@ -514,8 +610,12 @@ static int update_msg_mask_tbl_entry(struct diag_msg_mask_t *mask,
 {
 	uint32_t temp_range;
 
-	if (!mask || !range)
+	if (!mask || !range) {
+		DIAG_LOG(DIAG_DEBUG_PERIPHERALS,
+		"diag: Invalid %s\n",
+		(!mask ? "mask" : (!range ? "range" : " ")));
 		return -EIO;
+	}
 	if (range->ssid_last < range->ssid_first) {
 		pr_err("diag: In %s, invalid ssid range, first: %d, last: %d\n",
 		       __func__, range->ssid_first, range->ssid_last);
@@ -547,8 +647,16 @@ static void process_ssid_range_report(uint8_t *buf, uint32_t len,
 	uint8_t *temp = NULL;
 	uint32_t min_len = header_len - sizeof(struct diag_ctrl_pkt_header_t);
 
-	if (!buf || peripheral >= NUM_PERIPHERALS || len < min_len)
+	if (!buf || peripheral >= NUM_PERIPHERALS || len < min_len) {
+		DIAG_LOG(DIAG_DEBUG_PERIPHERALS,
+		"diag: Invalid parameters:(!buf) = %d, peripheral = %d, len = %d, min_len = %d\n",
+		!buf, peripheral, len, min_len);
 		return;
+	}
+
+	DIAG_LOG(DIAG_DEBUG_CONTROL,
+		"diag: started processing ssid range for peripheral (%d)\n",
+		peripheral);
 
 	header = (struct diag_ctrl_ssid_range_report *)ptr;
 	ptr += header_len;
@@ -564,7 +672,7 @@ static void process_ssid_range_report(uint8_t *buf, uint32_t len,
 		mask_ptr = (struct diag_msg_mask_t *)msg_mask.ptr;
 		found = 0;
 		for (j = 0; j < driver->msg_mask_tbl_count; j++, mask_ptr++) {
-			if (!mask_ptr || !ssid_range) {
+			if (!mask_ptr->ptr || !ssid_range) {
 				found = 1;
 				break;
 			}
@@ -607,6 +715,9 @@ static void process_ssid_range_report(uint8_t *buf, uint32_t len,
 		driver->msg_mask_tbl_count += 1;
 	}
 	mutex_unlock(&driver->msg_mask_lock);
+	DIAG_LOG(DIAG_DEBUG_CONTROL,
+		"diag: processed ssid range for peripheral(%d)\n",
+		peripheral);
 }
 
 static void diag_build_time_mask_update(uint8_t *buf,
@@ -623,8 +734,12 @@ static void diag_build_time_mask_update(uint8_t *buf,
 	uint32_t *dest_ptr = NULL;
 	struct diag_msg_mask_t *build_mask = NULL;
 
-	if (!range || !buf)
+	if (!range || !buf) {
+		DIAG_LOG(DIAG_DEBUG_PERIPHERALS,
+		"diag: Invalid %s\n",
+		(!range ? "range" : (!buf ? "buf" : " ")));
 		return;
+	}
 
 	if (range->ssid_last < range->ssid_first) {
 		pr_err("diag: In %s, invalid ssid range, first: %d, last: %d\n",
@@ -636,7 +751,7 @@ static void diag_build_time_mask_update(uint8_t *buf,
 	num_items = range->ssid_last - range->ssid_first + 1;
 
 	for (i = 0; i < driver->bt_msg_mask_tbl_count; i++, build_mask++) {
-		if (!build_mask) {
+		if (!build_mask->ptr) {
 			found = 1;
 			break;
 		}
@@ -696,8 +811,16 @@ static void process_build_mask_report(uint8_t *buf, uint32_t len,
 	struct diag_ctrl_build_mask_report *header = NULL;
 	struct diag_ssid_range_t *range = NULL;
 
-	if (!buf || peripheral >= NUM_PERIPHERALS || len < header_len)
+	if (!buf || peripheral >= NUM_PERIPHERALS || len < header_len) {
+		DIAG_LOG(DIAG_DEBUG_PERIPHERALS,
+		"diag: Invalid parameters:(!buf) = %d, peripheral = %d, len = %d, header_len = %d\n",
+		!buf, peripheral, len, header_len);
 		return;
+	}
+
+	DIAG_LOG(DIAG_DEBUG_CONTROL,
+		"diag: started processing build mask for peripheral(%d)\n",
+		peripheral);
 
 	header = (struct diag_ctrl_build_mask_report *)ptr;
 	ptr += header_len;
@@ -713,6 +836,8 @@ static void process_build_mask_report(uint8_t *buf, uint32_t len,
 		ptr += num_items * sizeof(uint32_t);
 		read_len += num_items * sizeof(uint32_t);
 	}
+	DIAG_LOG(DIAG_DEBUG_CONTROL,
+		"diag: processing build mask complete (%d)\n", peripheral);
 }
 
 int diag_add_diag_id_to_list(uint8_t diag_id, char *process_name,
@@ -720,8 +845,12 @@ int diag_add_diag_id_to_list(uint8_t diag_id, char *process_name,
 {
 	struct diag_id_tbl_t *new_item = NULL;
 
-	if (!process_name || diag_id == 0)
+	if (!process_name || diag_id == 0) {
+		DIAG_LOG(DIAG_DEBUG_PERIPHERALS,
+		"diag: Invalid parameters: !process_name = %d, diag_id = %d\n",
+		!process_name, diag_id);
 		return -EINVAL;
+	}
 
 	new_item = kzalloc(sizeof(struct diag_id_tbl_t), GFP_KERNEL);
 	if (!new_item)
@@ -751,8 +880,10 @@ int diag_query_diag_id(char *process_name, uint8_t *diag_id)
 	struct list_head *temp;
 	struct diag_id_tbl_t *item = NULL;
 
-	if (!process_name || !diag_id)
+	if (!process_name || !diag_id) {
+		DIAG_LOG(DIAG_DEBUG_PERIPHERALS, "diag: Invalid parameters\n");
 		return -EINVAL;
+	}
 
 	mutex_lock(&driver->diag_id_mutex);
 	list_for_each_safe(start, temp, &driver->diag_id_list) {
@@ -779,8 +910,12 @@ static void process_diagid(uint8_t *buf, uint32_t len,
 	uint8_t local_diag_id = 0;
 	uint8_t new_request = 0, i = 0, ch_type = 0;
 
-	if (!buf || len == 0 || peripheral >= NUM_PERIPHERALS)
+	if (!buf || len == 0 || peripheral >= NUM_PERIPHERALS) {
+		DIAG_LOG(DIAG_DEBUG_PERIPHERALS,
+		"diag: Invalid parameters: !buf = %d, len = %d, peripheral = %d\n",
+		!buf, len, peripheral);
 		return;
+	}
 
 	header = (struct diag_ctrl_diagid *)buf;
 	process_name = (char *)&header->process_name;
@@ -858,13 +993,13 @@ static void process_diagid(uint8_t *buf, uint32_t len,
 		fwd_info = &peripheral_info[TYPE_DATA][peripheral];
 		diagfwd_buffers_init(fwd_info);
 		DIAG_LOG(DIAG_DEBUG_PERIPHERALS,
-		"diag: diag_id sent = %d to peripheral = %d with diag_id = %d for %s :\n",
+		"diag: diag_id sent = %d to peripheral = %d with diag_id = %d for %s\n",
 			driver->diag_id_sent[peripheral], peripheral,
 			ctrl_pkt.diag_id, process_name);
 	}
 }
 
-#if defined(CONFIG_LGE_USB_DIAG_LOCK_SPR) || defined(CONFIG_LGE_ONE_BINARY_SKU)
+#ifdef CONFIG_LGE_USB_DIAG_LOCK_SPR
 extern void diag_lock_set_allowed(bool allowed);
 #endif
 
@@ -875,12 +1010,14 @@ void diag_cntl_process_read_data(struct diagfwd_info *p_info, void *buf,
 	uint32_t header_len = sizeof(struct diag_ctrl_pkt_header_t);
 	uint8_t *ptr = buf;
 	struct diag_ctrl_pkt_header_t *ctrl_pkt = NULL;
-#if defined(CONFIG_LGE_USB_DIAG_LOCK_SPR) || defined(CONFIG_LGE_ONE_BINARY_SKU)
+#ifdef CONFIG_LGE_USB_DIAG_LOCK_SPR
 	struct diag_ctrl_cmd_reg *reg = NULL;
 #endif
 
-	if (!buf || len <= 0 || !p_info)
+	if (!buf || len <= 0 || !p_info) {
+		DIAG_LOG(DIAG_DEBUG_PERIPHERALS, "diag: Invalid parameters\n");
 		return;
+	}
 
 	if (reg_dirty & PERIPHERAL_MASK(p_info->peripheral)) {
 		pr_err_ratelimited("diag: dropping command registration from peripheral %d\n",
@@ -890,6 +1027,9 @@ void diag_cntl_process_read_data(struct diagfwd_info *p_info, void *buf,
 
 	while (read_len + header_len < len) {
 		ctrl_pkt = (struct diag_ctrl_pkt_header_t *)ptr;
+		DIAG_LOG(DIAG_DEBUG_CONTROL,
+			"diag:peripheral: %d: pkt_id: %d\n",
+			p_info->peripheral, ctrl_pkt->pkt_id);
 		switch (ctrl_pkt->pkt_id) {
 		case DIAG_CTRL_MSG_REG:
 			process_command_registration(ptr, ctrl_pkt->len,
@@ -927,30 +1067,24 @@ void diag_cntl_process_read_data(struct diagfwd_info *p_info, void *buf,
 			process_diagid(ptr, ctrl_pkt->len,
 						   p_info->peripheral);
 			break;
-#if defined(CONFIG_LGE_USB_DIAG_LOCK_SPR)
+#ifdef CONFIG_LGE_USB_DIAG_LOCK_SPR
 		case DIAG_CTRL_MSG_LGE_DIAG_ENABLE:
 			reg = (struct diag_ctrl_cmd_reg *)ptr;
 			diag_lock_set_allowed(reg->cmd_code);
 			pr_info("diag: In %s, diag_enable: %d\n", __func__,
 				reg->cmd_code);
 			break;
-#elif defined(CONFIG_LGE_ONE_BINARY_SKU)
-		case DIAG_CTRL_MSG_LGE_DIAG_ENABLE:
-			if(lge_get_laop_operator() == OP_SPR_US) {
-				reg = (struct diag_ctrl_cmd_reg *)ptr;
-				diag_lock_set_allowed(reg->cmd_code);
-				pr_info("diag: In %s, diag_enable: %d\n", __func__,
-						reg->cmd_code);
-				break;
-			}
 #endif
 		default:
-			pr_debug("diag: Control packet %d not supported\n",
-				 ctrl_pkt->pkt_id);
+			DIAG_LOG(DIAG_DEBUG_CONTROL,
+			"diag: Control packet %d not supported\n",
+			 ctrl_pkt->pkt_id);
 		}
 		ptr += header_len + ctrl_pkt->len;
 		read_len += header_len + ctrl_pkt->len;
 	}
+	DIAG_LOG(DIAG_DEBUG_CONTROL,
+	"diag: control packet processing complete\n");
 }
 
 static int diag_compute_real_time(int idx)
@@ -1168,15 +1302,16 @@ void diag_real_time_work_fn(struct work_struct *work)
 	for (i = 0; i < DIAG_NUM_PROC; i++) {
 		temp_real_time = diag_compute_real_time(i);
 		if (temp_real_time == driver->real_time_mode[i]) {
-			pr_debug("diag: did not update real time mode on proc %d, already in the req mode %d",
+			DIAG_LOG(DIAG_DEBUG_PERIPHERALS,
+				"diag: did not update real time mode on proc %d, already in the req mode %d\n",
 				i, temp_real_time);
 			continue;
 		}
 
 		if (i == DIAG_LOCAL_PROC) {
 			if (!send_update) {
-				pr_debug("diag: In %s, cannot send real time mode pkt since one of the periperhal is in buffering mode\n",
-					 __func__);
+				DIAG_LOG(DIAG_DEBUG_PERIPHERALS,
+				"diag: cannot send real time mode pkt since one of the periperhal is in buffering mode\n");
 				break;
 			}
 			for (j = 0; j < NUM_PERIPHERALS; j++)
@@ -1210,7 +1345,8 @@ void diag_real_time_work_fn(struct work_struct *work)
 			temp_real_time = MODE_NONREALTIME;
 		}
 		if (temp_real_time == driver->real_time_mode[i]) {
-			pr_debug("diag: did not update real time mode on proc %d, already in the req mode %d",
+			DIAG_LOG(DIAG_DEBUG_PERIPHERALS,
+				"diag: did not update real time mode on proc %d, already in the req mode %d\n",
 				i, temp_real_time);
 			continue;
 		}
@@ -1245,8 +1381,8 @@ static int __diag_send_real_time_update(uint8_t peripheral, int real_time,
 
 	if (!driver->diagfwd_cntl[peripheral] ||
 	    !driver->diagfwd_cntl[peripheral]->ch_open) {
-		pr_debug("diag: In %s, control channel is not open, p: %d\n",
-			 __func__, peripheral);
+		DIAG_LOG(DIAG_DEBUG_PERIPHERALS,
+		"diag: control channel is not open, p: %d\n", peripheral);
 		return err;
 	}
 
@@ -1358,8 +1494,9 @@ int diag_send_peripheral_buffering_mode(struct diag_buffering_mode_t *params)
 	}
 
 	if (!driver->feature[peripheral].peripheral_buffering) {
-		pr_debug("diag: In %s, peripheral %d doesn't support buffering\n",
-			 __func__, peripheral);
+		DIAG_LOG(DIAG_DEBUG_PERIPHERALS,
+			"diag: peripheral %d doesn't support buffering\n",
+			 peripheral);
 		driver->buffering_flag[params->peripheral] = 0;
 		return -EIO;
 	}
@@ -1424,8 +1561,9 @@ int diag_send_stm_state(uint8_t peripheral, uint8_t stm_control_data)
 
 	if (!driver->diagfwd_cntl[peripheral] ||
 	    !driver->diagfwd_cntl[peripheral]->ch_open) {
-		pr_debug("diag: In %s, control channel is not open, p: %d\n",
-			 __func__, peripheral);
+		DIAG_LOG(DIAG_DEBUG_PERIPHERALS,
+			"diag: control channel is not open, p: %d\n",
+			 peripheral);
 		return -ENODEV;
 	}
 
@@ -1454,15 +1592,17 @@ int diag_send_peripheral_drain_immediate(uint8_t pd,
 	struct diag_ctrl_drain_immediate_v2 ctrl_pkt_v2;
 
 	if (!driver->feature[peripheral].peripheral_buffering) {
-		pr_debug("diag: In %s, peripheral  %d doesn't support buffering\n",
-			 __func__, peripheral);
+		DIAG_LOG(DIAG_DEBUG_PERIPHERALS,
+			"diag: peripheral  %d doesn't support buffering\n",
+			 peripheral);
 		return -EINVAL;
 	}
 
 	if (!driver->diagfwd_cntl[peripheral] ||
 	    !driver->diagfwd_cntl[peripheral]->ch_open) {
-		pr_debug("diag: In %s, control channel is not open, p: %d\n",
-			 __func__, peripheral);
+		DIAG_LOG(DIAG_DEBUG_PERIPHERALS,
+			"diag: control channel is not open, p: %d\n",
+			 peripheral);
 		return -ENODEV;
 	}
 
@@ -1519,8 +1659,9 @@ int diag_send_buffering_tx_mode_pkt(uint8_t peripheral,
 	}
 
 	if (!driver->feature[peripheral].peripheral_buffering) {
-		pr_debug("diag: In %s, peripheral  %d doesn't support buffering\n",
-			 __func__, peripheral);
+		DIAG_LOG(DIAG_DEBUG_PERIPHERALS,
+			"diag: peripheral  %d doesn't support buffering\n",
+			 peripheral);
 		return -EINVAL;
 	}
 
@@ -1598,15 +1739,17 @@ int diag_send_buffering_wm_values(uint8_t peripheral,
 	}
 
 	if (!driver->feature[peripheral].peripheral_buffering) {
-		pr_debug("diag: In %s, peripheral  %d doesn't support buffering\n",
-			 __func__, peripheral);
+		DIAG_LOG(DIAG_DEBUG_PERIPHERALS,
+			"diag: peripheral  %d doesn't support buffering\n",
+			 peripheral);
 		return -EINVAL;
 	}
 
 	if (!driver->diagfwd_cntl[peripheral] ||
 	    !driver->diagfwd_cntl[peripheral]->ch_open) {
-		pr_debug("diag: In %s, control channel is not open, p: %d\n",
-			 __func__, peripheral);
+		DIAG_LOG(DIAG_DEBUG_PERIPHERALS,
+			"diag: control channel is not open, p: %d\n",
+			 peripheral);
 		return -ENODEV;
 	}
 

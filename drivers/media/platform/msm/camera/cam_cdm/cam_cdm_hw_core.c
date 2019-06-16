@@ -1,4 +1,4 @@
-/* Copyright (c) 2017, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2017-2018, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -367,11 +367,37 @@ int cam_hw_cdm_submit_gen_irq(struct cam_hw_info *cdm_hw,
 	node->userdata = req->data->userdata;
 	list_add_tail(&node->entry, &core->bl_request_list);
 	len = core->ops->cdm_required_size_genirq() * core->bl_tag;
+
+/* LGE_CHANGE_S, fix to access invalid memory 2018-12-28 */
+#if 0 // QCT_ORI
 	core->ops->cdm_write_genirq(((uint32_t *)core->gen_irq.kmdvaddr + len),
 		core->bl_tag);
 	rc = cam_hw_cdm_bl_write(cdm_hw, (core->gen_irq.vaddr + (4*len)),
 		((4 * core->ops->cdm_required_size_genirq()) - 1),
 		core->bl_tag);
+#else
+	/*
+	*  LGE_CHANGE: camera-stability@lge.com 2018-12-19
+	*  If the cam_hw_cdm_submit_gen_irq function is called after gen_irq is released, kernel panic occurs.
+	*  Try to check if gen_irq.kmdvaddr is valid address.
+	*/
+	if (virt_addr_valid(core->gen_irq.kmdvaddr) || is_vmalloc_or_module_addr((const void *)core->gen_irq.kmdvaddr)) {
+		core->ops->cdm_write_genirq(((uint32_t *)core->gen_irq.kmdvaddr + len),
+			core->bl_tag);
+		rc = cam_hw_cdm_bl_write(cdm_hw, (core->gen_irq.vaddr + (4*len)),
+			((4 * core->ops->cdm_required_size_genirq()) - 1),
+			core->bl_tag);
+	} else {
+		CAM_ERR(CAM_CDM, "CDM hw bl write failed for gen irq bltag=%d because gen_irq had been released(kmdvaddr = 0x%llx).",
+			core->bl_tag, core->gen_irq.kmdvaddr);
+		list_del_init(&node->entry);
+		kfree(node);
+		rc = -EIO;
+		goto end;
+	}
+#endif
+/* LGE_CHANGE_E, fix to access invalid memory 2018-12-28 */
+
 	if (rc) {
 		CAM_ERR(CAM_CDM, "CDM hw bl write failed for gen irq bltag=%d",
 			core->bl_tag);
@@ -422,7 +448,7 @@ int cam_hw_cdm_submit_bl(struct cam_hw_info *cdm_hw,
 	}
 
 	for (i = 0; i < req->data->cmd_arrary_count ; i++) {
-		uint64_t hw_vaddr_ptr = 0;
+		dma_addr_t hw_vaddr_ptr = 0;
 		size_t len = 0;
 
 		if ((!cdm_cmd->cmd[i].len) &&
@@ -470,7 +496,7 @@ int cam_hw_cdm_submit_bl(struct cam_hw_info *cdm_hw,
 			}
 			rc = 0;
 			hw_vaddr_ptr =
-				(uint64_t)cdm_cmd->cmd[i].bl_addr.hw_iova;
+				(dma_addr_t) cdm_cmd->cmd[i].bl_addr.hw_iova;
 			len = cdm_cmd->cmd[i].len + cdm_cmd->cmd[i].offset;
 		} else {
 			CAM_ERR(CAM_CDM,
@@ -509,8 +535,8 @@ int cam_hw_cdm_submit_bl(struct cam_hw_info *cdm_hw,
 
 		if (!rc) {
 			CAM_DBG(CAM_CDM,
-				"write BL success for cnt=%d with tag=%d",
-				i, core->bl_tag);
+				"write BL success for cnt=%d with tag=%d total_cnt",
+				i, core->bl_tag, req->data->cmd_arrary_count);
 
 			CAM_DBG(CAM_CDM, "Now commit the BL");
 			if (cam_hw_cdm_commit_bl_write(cdm_hw)) {
@@ -550,36 +576,35 @@ static void cam_hw_cdm_work(struct work_struct *work)
 		cdm_hw = payload->hw;
 		core = (struct cam_cdm *)cdm_hw->core_info;
 
-		CAM_DBG(CAM_CDM, "IRQ status=%x", payload->irq_status);
+		CAM_DBG(CAM_CDM, "IRQ status=0x%x", payload->irq_status);
 		if (payload->irq_status &
 			CAM_CDM_IRQ_STATUS_INFO_INLINE_IRQ_MASK) {
-			struct cam_cdm_bl_cb_request_entry *node;
+			struct cam_cdm_bl_cb_request_entry *node, *tnode;
 
-			CAM_DBG(CAM_CDM, "inline IRQ data=%x",
+			CAM_DBG(CAM_CDM, "inline IRQ data=0x%x",
 				payload->irq_data);
 			mutex_lock(&cdm_hw->hw_mutex);
-			node = cam_cdm_find_request_by_bl_tag(
-					payload->irq_data,
-					&core->bl_request_list);
-			if (node) {
+			list_for_each_entry_safe(node, tnode,
+					&core->bl_request_list, entry) {
 				if (node->request_type ==
 					CAM_HW_CDM_BL_CB_CLIENT) {
 					cam_cdm_notify_clients(cdm_hw,
 						CAM_CDM_CB_STATUS_BL_SUCCESS,
 						(void *)node);
 				} else if (node->request_type ==
-						CAM_HW_CDM_BL_CB_INTERNAL) {
+					CAM_HW_CDM_BL_CB_INTERNAL) {
 					CAM_ERR(CAM_CDM,
 						"Invalid node=%pK %d", node,
 						node->request_type);
 				}
 				list_del_init(&node->entry);
+				if (node->bl_tag == payload->irq_data) {
+					kfree(node);
+					break;
+				}
 				kfree(node);
-			} else {
-				CAM_ERR(CAM_CDM,
-					"Inval node, inline_irq st=%x data=%x",
-					payload->irq_status, payload->irq_data);
 			}
+
 			mutex_unlock(&cdm_hw->hw_mutex);
 		}
 
@@ -624,7 +649,8 @@ static void cam_hw_cdm_work(struct work_struct *work)
 }
 
 static void cam_hw_cdm_iommu_fault_handler(struct iommu_domain *domain,
-	struct device *dev, unsigned long iova, int flags, void *token)
+	struct device *dev, unsigned long iova, int flags, void *token,
+	uint32_t buf_info)
 {
 	struct cam_hw_info *cdm_hw = NULL;
 	struct cam_cdm *core = NULL;
@@ -679,11 +705,11 @@ irqreturn_t cam_hw_cdm_irq(int irq_num, void *data)
 		if (cam_cdm_write_hw_reg(cdm_hw, CDM_IRQ_CLEAR,
 			payload->irq_status))
 			CAM_ERR(CAM_CDM, "Failed to Write CDM HW IRQ Clear");
+		work_status = queue_work(cdm_core->work_queue, &payload->work);
 		if (cam_cdm_write_hw_reg(cdm_hw, CDM_IRQ_CLEAR_CMD, 0x01))
 			CAM_ERR(CAM_CDM, "Failed to Write CDM HW IRQ cmd");
-		work_status = queue_work(cdm_core->work_queue, &payload->work);
 		if (work_status == false) {
-			CAM_ERR(CAM_CDM, "Failed to queue work for irq=%x",
+			CAM_ERR(CAM_CDM, "Failed to queue work for irq=0x%x",
 				payload->irq_status);
 			kfree(payload);
 		}
@@ -695,8 +721,8 @@ irqreturn_t cam_hw_cdm_irq(int irq_num, void *data)
 int cam_hw_cdm_alloc_genirq_mem(void *hw_priv)
 {
 	struct cam_hw_info *cdm_hw = hw_priv;
-	struct cam_mem_mgr_request_desc genirq_alloc_cmd;
-	struct cam_mem_mgr_memory_desc genirq_alloc_out;
+	struct cam_mem_mgr_request_desc genirq_alloc_cmd = { 0, };
+	struct cam_mem_mgr_memory_desc genirq_alloc_out = { 0, };
 	struct cam_cdm *cdm_core = NULL;
 	int rc =  -EINVAL;
 
@@ -727,7 +753,7 @@ int cam_hw_cdm_release_genirq_mem(void *hw_priv)
 {
 	struct cam_hw_info *cdm_hw = hw_priv;
 	struct cam_cdm *cdm_core = NULL;
-	struct cam_mem_mgr_memory_desc genirq_release_cmd;
+	struct cam_mem_mgr_memory_desc genirq_release_cmd = { 0, };
 	int rc =  -EINVAL;
 
 	if (!hw_priv)
@@ -736,6 +762,19 @@ int cam_hw_cdm_release_genirq_mem(void *hw_priv)
 	cdm_core = (struct cam_cdm *)cdm_hw->core_info;
 	genirq_release_cmd.mem_handle = cdm_core->gen_irq.handle;
 	rc = cam_mem_mgr_release_mem(&genirq_release_cmd);
+
+	/* LGE_CHANGE_S, fix to access invalid memory 2018-12-28 */
+	/*
+	*  LGE_CHANGE: camera-stability@lge.com 2018-12-19
+	*  After calling cam_mem_mgr_release_mem function,
+	*  the fields of gen_irq should be initialized.
+	*/
+	cdm_core->gen_irq.handle = -1;
+	cdm_core->gen_irq.vaddr = 0x0;
+	cdm_core->gen_irq.kmdvaddr = 0x0;
+	cdm_core->gen_irq.size = 0x0;
+	/* LGE_CHANGE_E, fix to access invalid memory 2018-12-28 */
+
 	if (rc)
 		CAM_ERR(CAM_CDM, "Failed to put genirq cmd space for hw");
 
@@ -835,8 +874,10 @@ int cam_hw_cdm_probe(struct platform_device *pdev)
 	struct cam_cdm *cdm_core = NULL;
 	struct cam_cdm_private_dt_data *soc_private = NULL;
 	struct cam_cpas_register_params cpas_parms;
-	struct cam_ahb_vote ahb_vote;
-	struct cam_axi_vote axi_vote;
+	struct cam_ahb_vote ahb_vote = { 0, };
+	struct cam_axi_vote axi_vote = { 0, };
+
+	memset(&cpas_parms, 0 , sizeof(cpas_parms));
 
 	cdm_hw_intf = kzalloc(sizeof(struct cam_hw_intf), GFP_KERNEL);
 	if (!cdm_hw_intf)
@@ -910,7 +951,7 @@ int cam_hw_cdm_probe(struct platform_device *pdev)
 		CAM_ERR(CAM_CDM, "cpas-cdm get iommu handle failed");
 		goto unlock_release_mem;
 	}
-	cam_smmu_reg_client_page_fault_handler(cdm_core->iommu_hdl.non_secure,
+	cam_smmu_set_client_page_fault_handler(cdm_core->iommu_hdl.non_secure,
 		cam_hw_cdm_iommu_fault_handler, cdm_hw);
 
 	rc = cam_smmu_ops(cdm_core->iommu_hdl.non_secure, CAM_SMMU_ATTACH);
@@ -1034,7 +1075,7 @@ release_platform_resource:
 	flush_workqueue(cdm_core->work_queue);
 	destroy_workqueue(cdm_core->work_queue);
 destroy_non_secure_hdl:
-	cam_smmu_reg_client_page_fault_handler(cdm_core->iommu_hdl.non_secure,
+	cam_smmu_set_client_page_fault_handler(cdm_core->iommu_hdl.non_secure,
 		NULL, cdm_hw);
 	if (cam_smmu_destroy_handle(cdm_core->iommu_hdl.non_secure))
 		CAM_ERR(CAM_CDM, "Release iommu secure hdl failed");
@@ -1106,8 +1147,8 @@ int cam_hw_cdm_remove(struct platform_device *pdev)
 
 	if (cam_smmu_destroy_handle(cdm_core->iommu_hdl.non_secure))
 		CAM_ERR(CAM_CDM, "Release iommu secure hdl failed");
-	cam_smmu_reg_client_page_fault_handler(cdm_core->iommu_hdl.non_secure,
-		NULL, cdm_hw);
+	cam_smmu_unset_client_page_fault_handler(
+		cdm_core->iommu_hdl.non_secure, cdm_hw);
 
 	mutex_destroy(&cdm_hw->hw_mutex);
 	kfree(cdm_hw->soc_info.soc_private);
@@ -1125,6 +1166,7 @@ static struct platform_driver cam_hw_cdm_driver = {
 		.name = "msm_cam_cdm",
 		.owner = THIS_MODULE,
 		.of_match_table = msm_cam_hw_cdm_dt_match,
+		.suppress_bind_attrs = true,
 	},
 };
 

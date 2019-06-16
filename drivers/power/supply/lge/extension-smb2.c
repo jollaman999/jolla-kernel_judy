@@ -438,9 +438,17 @@ static int restricted_charging_vfloat(struct smb_charger* charger, int mvalue) {
 			int uv_float = mvalue*1000, uv_now;
 			rc |= power_supply_get_property(charger->bms_psy,
 				POWER_SUPPLY_PROP_VOLTAGE_OCV, &val);
-			uv_now = val.intval; pr_err("uv_now : %d\n", uv_now);
-			vote(charger->fv_votable, VENEER_VOTER_VFLOAT,
-				true, max(uv_float, uv_now));
+			uv_now = val.intval; pr_debug("uv_now : %d\n", uv_now);
+			if (uv_now > uv_float
+				&& !is_client_vote_enabled(charger->fv_votable, VENEER_VOTER_VFLOAT)) {
+				rc |= vote(charger->chg_disable_votable, VENEER_VOTER_VFLOAT,
+					true, 0);
+			} else {
+				rc |= vote(charger->chg_disable_votable, VENEER_VOTER_VFLOAT,
+					false, 0);
+				rc |= vote(charger->fv_votable, VENEER_VOTER_VFLOAT,
+					true, uv_float);
+			}
 		}
 	}
 	else {
@@ -1269,7 +1277,7 @@ static int usb_pcport_current(/*@Nonnull*/ struct smb_charger *chg, int req) {
 		power_supply_get_property(veneer, POWER_SUPPLY_PROP_SDP_CURRENT_MAX, &val);
 		power_supply_put(veneer);
 
-		if (val.intval != VOTE_TOTALLY_RELEASED)
+		if (val.intval != VOTE_TOTALLY_RELEASED && !workaround_usb_compliance_mode_enabled())
 			return val.intval;
 	}
 
@@ -1397,8 +1405,9 @@ int extension_usb_get_property(struct power_supply *psy,
 			val->intval = false;
 			return 0;
 		}
-		if ((chg->pd_hard_reset && chg->typec_mode != POWER_SUPPLY_TYPEC_NONE)
-			|| chg->typec_en_dis_active) {
+		if (chg->typec_en_dis_active ||
+		    (chg->pd_hard_reset &&
+			 chg->typec_mode >= POWER_SUPPLY_TYPEC_SOURCE_DEFAULT)) {
 			pr_debug("Set PRESENT by force\n");
 			val->intval = true;
 			return 0;
@@ -1437,7 +1446,8 @@ int extension_usb_set_property(struct power_supply* psy,
 
 	switch (prp) {
 	case POWER_SUPPLY_PROP_PD_IN_HARD_RESET:
-		if (val->intval && chg->real_charger_type == POWER_SUPPLY_TYPE_USB_FLOAT) {
+		if (val->intval && chg->real_charger_type == POWER_SUPPLY_TYPE_USB_FLOAT
+				&& !workaround_floating_during_rerun_working()) {
 			struct power_supply* veneer
 				= power_supply_get_by_name("veneer");
 			union power_supply_propval floated

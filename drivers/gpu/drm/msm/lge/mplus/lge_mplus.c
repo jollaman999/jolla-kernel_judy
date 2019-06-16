@@ -68,11 +68,11 @@ static ssize_t mplus_hd_set(struct device *dev,
 	}
 	mutex_unlock(&panel->panel_lock);
 
-	addr = (unsigned int **)kallsyms_lookup_name("main_display");
+	addr = (unsigned int **)kallsyms_lookup_name("primary_display");
 	if (addr) {
 		display = (struct dsi_display *)*addr;
 	} else {
-		pr_err("main_display not founded.\n");
+		pr_err("primary_display not founded.\n");
 		return -EINVAL;
 	}
 
@@ -153,11 +153,11 @@ static ssize_t mplus_max_set(struct device *dev,
 	}
 	mutex_unlock(&panel->panel_lock);
 
-	addr = (unsigned int **)kallsyms_lookup_name("main_display");
+	addr = (unsigned int **)kallsyms_lookup_name("primary_display");
 	if (addr) {
 		display = (struct dsi_display *)*addr;
 	} else {
-		pr_err("main_display not founded.\n");
+		pr_err("primary_display not founded.\n");
 		return -EINVAL;
 	}
 
@@ -227,11 +227,11 @@ static ssize_t mplus_mode_set(struct device *dev,
 	}
 	mutex_unlock(&panel->panel_lock);
 
-	addr = (unsigned int **)kallsyms_lookup_name("main_display");
+	addr = (unsigned int **)kallsyms_lookup_name("primary_display");
 	if (addr) {
 		display = (struct dsi_display *)*addr;
 	} else {
-		pr_err("main_display not founded.\n");
+		pr_err("primary_display not founded.\n");
 		return -EINVAL;
 	}
 

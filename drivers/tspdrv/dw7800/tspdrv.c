@@ -40,9 +40,9 @@
 #include <asm/uaccess.h>
 #include <asm/atomic.h>
 #include "tspdrv.h"
-#ifdef CONFIG_MACH_LGE
+#if defined(CONFIG_MACH_SDM845_JUDYPN)
 #include <soc/qcom/lge/board_lge.h>
-#endif /* CONFIG_MACH_LGE */
+#endif /* CONFIG_MACH_SDM845_JUDYPN */
 
 static int g_nTimerPeriodMs = 5; /* 5ms timer by default. This variable could be used by the SPI.*/
 
@@ -294,7 +294,8 @@ static int __init tspdrv_init(void)
 {
     int nRet, i;   /* initialized below */
 
-#ifdef CONFIG_MACH_LGE
+#if defined(CONFIG_MACH_SDM845_JUDYPN)
+    // only for STORM
     // ~ rev.A : dw7912
     // rev.B ~ : dw7800
     enum hw_rev_no revid = lge_get_board_rev_no();
@@ -304,7 +305,7 @@ static int __init tspdrv_init(void)
         pr_err("dw7800 tspdrv_init skip...\n");
         return 0;
     }
-#endif /* CONFIG_MACH_LGE */
+#endif /* CONFIG_MACH_SDM845_JUDYPN */
 
     atomic_set(&g_nDebugLevel, DBL_ERROR);
 #ifdef VIBE_RUNTIME_RECORD
@@ -366,7 +367,8 @@ static int __init tspdrv_init(void)
 
 static void __exit tspdrv_exit(void)
 {
-#ifdef CONFIG_MACH_LGE
+#if defined(CONFIG_MACH_SDM845_JUDYPN)
+    // only for STORM
     // ~ rev.A : dw7912
     // rev.B ~ : dw7800
     enum hw_rev_no revid = lge_get_board_rev_no();
@@ -376,7 +378,7 @@ static void __exit tspdrv_exit(void)
         pr_err("dw7800 tspdrv_init skip...\n");
         return;
     }
-#endif /* CONFIG_MACH_LGE */
+#endif /* CONFIG_MACH_SDM845_JUDYPN */
 
     DbgOutInfo(("tspdrv: cleanup_module.\n"));
 

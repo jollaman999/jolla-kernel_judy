@@ -55,6 +55,10 @@ static irqreturn_t mmc_gpio_cd_irqt(int irq, void *dev_id)
 {
 	/* Schedule a card detection after a debounce timeout */
 	struct mmc_host *host = dev_id;
+	int present = host->ops->get_cd(host);
+
+	pr_debug("%s: cd gpio irq, gpio state %d (CARD_%s)\n",
+		mmc_hostname(host), present, present?"INSERT":"REMOVAL");
 
 	host->trigger_card_event = true;
 
@@ -65,7 +69,7 @@ static irqreturn_t mmc_gpio_cd_irqt(int irq, void *dev_id)
 	if(mmc_card_is_removable(host))
 		is_damaged_sd = 0;
 
-	pr_info("[LGE][MMC][CCAudit]%s: slot status change detected(%s), GPIO_ACTIVE_%s\n",
+	pr_info("[LGE][MMC] %s: slot status change detected(%s), GPIO_ACTIVE_%s\n",
 		mmc_hostname(host), mmc_gpio_get_cd(host) ?
 		"INSERTED" : "EJECTED",
 		(host->caps2 & MMC_CAP2_CD_ACTIVE_HIGH) ?
@@ -76,7 +80,7 @@ static irqreturn_t mmc_gpio_cd_irqt(int irq, void *dev_id)
 	/* LGE_CHANGE, BSP-FS@lge.com
 	 * Reduce debounce time to make it more sensitive
 	 */
-	pr_info("[LGE][MMC][CCAudit]%s: mmc_gpio_get_cd = %d old_gpio = %d \n", mmc_hostname(host), mmc_gpio_get_cd(host), old_gpio);
+	pr_info("[LGE][MMC] %s: mmc_gpio_get_cd = %d old_gpio = %d \n", mmc_hostname(host), mmc_gpio_get_cd(host), old_gpio);
 	if(old_gpio == mmc_gpio_get_cd(host))
 		return IRQ_HANDLED;
 	old_gpio = mmc_gpio_get_cd(host);

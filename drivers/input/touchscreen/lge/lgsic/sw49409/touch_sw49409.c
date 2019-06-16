@@ -2105,9 +2105,9 @@ static int sw49409_upgrade(struct device *dev)
 
 	ret = request_firmware(&fw, fwpath, dev);
 
-	if (ret < 0) {
+	if (ret) {
 		TOUCH_E("fail to request_firmware fwpath: %s (ret:%d)\n", fwpath, ret);
-		return ret;
+		goto error;
 	}
 
 	TOUCH_I("fw size:%zu, data: %p\n", fw->size, fw->data);
@@ -2125,10 +2125,11 @@ static int sw49409_upgrade(struct device *dev)
 		}
 	} else {
 		ret = -EPERM;
+		goto error;
 	}
 
+error:
 	release_firmware(fw);
-
 	return ret;
 }
 

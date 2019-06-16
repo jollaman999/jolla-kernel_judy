@@ -65,7 +65,7 @@ static void log_file_size_check(struct device *dev)
 
 	switch (boot_mode) {
 	case NORMAL_BOOT:
-		fname = "/sdcard/touch_self_test.txt";
+		fname = "/data/vendor/touch/touch_self_test.txt";
 		break;
 	case MINIOS_AAT:
 		fname = "/data/touch/touch_self_test.txt";
@@ -167,7 +167,7 @@ static void write_file(struct device *dev, char *data, int write_time)
 
 	switch (boot_mode) {
 	case NORMAL_BOOT:
-		fname = "/sdcard/touch_self_test.txt";
+		fname = "/data/vendor/touch/touch_self_test.txt";
 		break;
 	case MINIOS_AAT:
 		fname = "/data/touch/touch_self_test.txt";
@@ -670,34 +670,6 @@ static void prd_read_rawdata(struct device *dev, u32 type)
 	}
 }
 
-static int sdcard_spec_file_read(struct device *dev)
-{
-	int ret = 0;
-	int fd = 0;
-	char *path[2] = { "/mnt/sdcard/judyln_limit.txt",
-		"/mnt/sdcard/judyln_limit_mfts.txt"
-	};
-	int path_idx = 0;
-
-	mm_segment_t old_fs = get_fs();
-
-	if (touch_boot_mode_check(dev) >= MINIOS_MFTS_FOLDER)
-		path_idx = 1;
-	else
-		path_idx = 0;
-	set_fs(KERNEL_DS);
-	fd = sys_open(path[path_idx], O_RDONLY, 0);
-	if (fd >= 0) {
-		sys_read(fd, line, sizeof(line));
-		sys_close(fd);
-		TOUCH_I("%s file existing\n", path[path_idx]);
-		ret = 1;
-	}
-	set_fs(old_fs);
-
-	return ret;
-}
-
 static int spec_file_read(struct device *dev)
 {
 	int ret = 0;
@@ -719,19 +691,26 @@ static int spec_file_read(struct device *dev)
 		goto error;
 	}
 
-	if (request_firmware(&fwlimit, path[path_idx], dev) < 0) {
-		TOUCH_I("request ihex is failed in normal mode\n");
-		ret = -1;
+	ret = request_firmware(&fwlimit, path[path_idx], dev);
+	if (ret) {
+		TOUCH_E("request ihex is failed in normal mode\n");
+		TOUCH_E("path_idx:%d, path:%s \n", path_idx, path[path_idx]);
 		goto error;
 	}
 
 	if (fwlimit->data == NULL) {
-		ret = -1;
 		TOUCH_I("fwlimit->data is NULL\n");
+		ret = -EINVAL;
 		goto error;
 	}
 
-	strlcpy(line, fwlimit->data, sizeof(line));
+	if (fwlimit->size == 0) {
+		TOUCH_E("fwlimit->size is 0\n");
+		ret = -EINVAL;
+		goto error;
+	}
+
+	strlcpy(line, fwlimit->data, fwlimit->size);
 
 error:
 	if (fwlimit)
@@ -748,9 +727,9 @@ static int sic_get_limit(struct device *dev, char *breakpoint,
 	int r = 0;
 	int cipher = 1;
 	int ret = 0;
+	int retval = 0;
 	char *found;
 	int boot_mode = 0;
-	int file_exist = 0;
 	int tx_num = 0;
 	int rx_num = 0;
 
@@ -767,12 +746,10 @@ static int sic_get_limit(struct device *dev, char *breakpoint,
 		goto error;
 	}
 
-	file_exist = sdcard_spec_file_read(dev);
-	if (!file_exist) {
-		TOUCH_I("There's no spec file. read it from F/W\n");
-		ret = spec_file_read(dev);
-		if (ret == -1)
-			goto error;
+	retval = spec_file_read(dev);
+	if (retval) {
+		ret = retval;
+		goto error;
 	}
 
 	if (line == NULL) {

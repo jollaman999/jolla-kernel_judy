@@ -9,10 +9,12 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  */
-
-#include "../../../qcom/smb1355.dtsi"
 #include <dt-bindings/msm/power-on.h>
 #include <dt-bindings/regulator/qcom,rpmh-regulator.h>
+
+&qupv3_se10_i2c {
+#include "../../../qcom/smb1355.dtsi"
+};
 
 &soc {
 	lge,gpio-debug {
@@ -47,9 +49,9 @@
 		qcom,resource-name = "bobb1";
 		qcom,send-defaults;
 		qcom,supported-modes =
-			<RPMH_REGULATOR_MODE_BOB_PASS
-			 RPMH_REGULATOR_MODE_BOB_AUTO
-			 RPMH_REGULATOR_MODE_BOB_PWM>;
+			<RPMH_REGULATOR_MODE_PASS
+			 RPMH_REGULATOR_MODE_AUTO
+			 RPMH_REGULATOR_MODE_HPM>;
 		qcom,mode-threshold-currents = <0 100000 200000>;
 
 		pmi8998_bob: regulator-bob {
@@ -58,7 +60,7 @@
 			regulator-min-microvolt = <3312000>;
 			regulator-max-microvolt = <3600000>;
 			qcom,init-voltage = <3312000>;
-			qcom,init-mode = <RPMH_REGULATOR_MODE_BOB_PASS>;
+			qcom,init-mode = <RPMH_REGULATOR_MODE_PASS>;
 		};
 
 		pmi8998_bob_ao: regulator-bob-ao {
@@ -67,7 +69,7 @@
 			regulator-min-microvolt = <3312000>;
 			regulator-max-microvolt = <3600000>;
 			qcom,init-voltage = <3312000>;
-			qcom,init-mode = <RPMH_REGULATOR_MODE_BOB_AUTO>;
+			qcom,init-mode = <RPMH_REGULATOR_MODE_AUTO>;
 		};
 	};
 };
@@ -75,7 +77,7 @@
 &spmi_bus {
 	qcom,pm8998@0 {
 		qcom,power-on@800 {
-			qcom,s3-debounce = <128>;
+			qcom,s3-debounce = <32>;
 			qcom,s3-src = "kpdpwr-and-resin";
 
 			qcom,pon_1 {
@@ -514,8 +516,11 @@
 };
 
 &pmi8998_fg {
-	qcom,fg-esr-rt-filter-switch-temp = <150 200 250>;
-	qcom,fg-esr-rt-filter-duration = <2400000 1800000 900000>;
+	qcom,fg-cutoff-voltage = <3200>;
+	qcom,fg-cutoff-current = <200>;
+
+	lge,fg-esr-rt-filter-switch-temp = <150 200 250>;
+	lge,fg-esr-rt-filter-duration = <2400000 1800000 900000>;
 	qcom,fg-esr-tight-rt-filter-micro-pct = <498000>;
 	qcom,fg-esr-broad-rt-filter-micro-pct = <498000>;
 	qcom,fg-esr-tight-lt-filter-micro-pct = <30000>;
@@ -735,6 +740,7 @@
 			"charger",                    "hvdcp_fake", "/sys/devices/platform/lge-unified-nodes/fake_hvdcp",
 			"charger",               "usb_current_max", "/sys/devices/platform/lge-unified-nodes/fake_sdpmax",
 			"charger",               "fastchg_support", "/sys/devices/platform/lge-unified-nodes/support_fastchg",
+			"charger",                    "usbid_type", "/sys/class/power_supply/usb/resistance_id",
 			/* ADC/MPP */
 			"adc",              "thermal", "/sys/class/thermal/",
 			"adc",             "xo_therm", "/sys/class/hwmon/hwmon1/device/xo_therm",
@@ -765,7 +771,7 @@
 			"battery",        "condition", "/sys/devices/platform/lge-unified-nodes/battery_condition",
 			"battery",      "battery_age", "/sys/devices/platform/lge-unified-nodes/battery_age",
 			"battery","battery_age_level", "/sys/devices/platform/lge-unified-nodes/battery_age",
-			"battery",            "cycle", "/sys/class/power_supply/bms/cycle_count",
+			"battery",            "cycle", "/sys/devices/platform/lge-unified-nodes/battery_cycle",
 			"battery",     "battery_type", "/sys/class/power_supply/bms/battery_type",
 			"battery",      "charge_full", "/sys/class/power_supply/bms/charge_full",
 			"battery",   "charge_now_raw", "/sys/class/power_supply/bms/charge_now_raw",
@@ -875,10 +881,6 @@
 		idt,gpio-idtfault = <&tlmm 52 0>;
 		idt,gpio-detached = <&tlmm 37 0>;
 		idt,gpio-disabled = <&pmi8998_gpios 9 0>;
-
-		// FOD parameters
-		idt,fod-bpp = [A5 28 88 2E 98 19 A3 03 A1 FB A8 E8 14 00 00 00];
-		idt,fod-epp = [A4 31 88 44 86 46 96 19 97 0A 9C E7 14 00 64 32];
 
 		idt,configure-bppcurr = <900000>;
 		idt,configure-eppcurr = <900000>;

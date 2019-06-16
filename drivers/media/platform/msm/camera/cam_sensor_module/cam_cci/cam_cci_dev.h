@@ -26,6 +26,7 @@
 #include <linux/timer.h>
 #include <linux/kernel.h>
 #include <linux/platform_device.h>
+#include <linux/semaphore.h>
 #include <media/cam_sensor.h>
 #include <media/v4l2-event.h>
 #include <media/v4l2-ioctl.h>
@@ -45,7 +46,7 @@
 #define CYCLES_PER_MICRO_SEC_DEFAULT 4915
 #define CCI_MAX_DELAY 1000000
 
-#define CCI_TIMEOUT msecs_to_jiffies(5000)
+#define CCI_TIMEOUT msecs_to_jiffies(1000) //LGE, CST,  5000->1000
 
 #define NUM_MASTERS 2
 #define NUM_QUEUES 2
@@ -65,7 +66,7 @@
 #define MAX_LRME_V4l2_EVENTS 30
 
 /* Max bytes that can be read per CCI read transaction */
-#if 0 //QCT_ORI
+#if 0 // QCT_ORI
 #define CCI_READ_MAX 256
 #else
 #define CCI_READ_MAX 12
@@ -141,10 +142,14 @@ struct cam_cci_master_info {
 	uint8_t reset_pending;
 	struct mutex mutex;
 	struct completion reset_complete;
+	struct completion th_complete;
 	struct mutex mutex_q[NUM_QUEUES];
 	struct completion report_q[NUM_QUEUES];
 	atomic_t done_pending[NUM_QUEUES];
 	spinlock_t lock_q[NUM_QUEUES];
+	struct semaphore master_sem;
+	bool is_first_req;
+	uint16_t freq_ref_cnt;
 };
 
 struct cam_cci_clk_params_t {
@@ -196,6 +201,12 @@ enum cam_cci_state_t {
  * @cci_wait_sync_cfg: CCI sync config
  * @cycles_per_us: Cycles per micro sec
  * @payload_size: CCI packet payload size
+ * @irq_status1: Store irq_status1 to be cleared after
+ *               draining FIFO buffer for burst read
+ * @lock_status: to protect changes to irq_status1
+ * @is_burst_read: Flag to determine if we are performing
+ *                 a burst read operation or not
+ * @irqs_disabled: Mask for IRQs that are disabled
  */
 struct cci_device {
 	struct v4l2_subdev subdev;
@@ -220,7 +231,11 @@ struct cci_device {
 	uint8_t payload_size;
 	char device_name[20];
 	uint32_t cpas_handle;
+	uint32_t irq_status1;
+	spinlock_t lock_status;
+	bool is_burst_read;
 	struct mutex global_mutex;
+	uint32_t irqs_disabled;
 };
 
 enum cam_cci_i2c_cmd_type {

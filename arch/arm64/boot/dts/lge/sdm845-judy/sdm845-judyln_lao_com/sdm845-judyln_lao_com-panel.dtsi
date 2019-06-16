@@ -30,7 +30,3 @@
 	qcom,en-cabc;
 	/delete-property/ qcom,auto-calibration-enable;
 };
-
-&mdss_mdp {
-       connectors = <&sde_rscc &sde_wb>;
-};

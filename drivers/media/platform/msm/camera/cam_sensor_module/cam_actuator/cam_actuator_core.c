@@ -17,7 +17,7 @@
 #include "cam_trace.h"
 #include "cam_res_mgr_api.h"
 
-#ifdef CONFIG_MACH_SDM845_JUDYPN
+#if defined (CONFIG_MACH_SDM845_JUDYPN) || defined (CONFIG_MACH_SDM845_BETA) /* LGE_CHANGE, 2018-09-11, OIS,AF Driver update for LG EIS, yonghwan.lym@lge.com */
 extern bool msm_act_data_enqueue(uint32_t reg_addr, uint32_t reg_data,
 		struct cam_actuator_ctrl_t *a_ctrl);
 #endif
@@ -40,7 +40,7 @@ int32_t cam_actuator_construct_default_power_setting(
 	power_info->power_setting[0].config_val = 1;
 
     /*LGE_CHANGE_S, Added power up delay for storm vcm, 2018-06-22, dongsu.bag@lge.com */
-#ifdef CONFIG_MACH_SDM845_JUDYPN
+#if defined (CONFIG_MACH_SDM845_JUDYPN)  || defined (CONFIG_MACH_SDM845_BETA)
 	power_info->power_setting[0].delay = 20;
 #else
     power_info->power_setting[0].delay = 2;
@@ -65,6 +65,8 @@ int32_t cam_actuator_construct_default_power_setting(
 
 free_power_settings:
 	kfree(power_info->power_setting);
+	power_info->power_setting = NULL;
+	power_info->power_setting_size = 0;
 	return rc;
 }
 
@@ -151,7 +153,7 @@ static int32_t cam_actuator_power_down(struct cam_actuator_ctrl_t *a_ctrl)
 		CAM_ERR(CAM_ACTUATOR, "failed: power_info %pK", power_info);
 		return -EINVAL;
 	}
-	rc = msm_camera_power_down(power_info, soc_info);
+	rc = cam_sensor_util_power_down(power_info, soc_info);
 	if (rc) {
 		CAM_ERR(CAM_ACTUATOR, "power down the core is failed:%d", rc);
 		return rc;
@@ -178,7 +180,7 @@ static int32_t cam_actuator_i2c_modes_util(
 				rc);
 			return rc;
 		}
-#ifdef CONFIG_MACH_SDM845_JUDYPN
+#if defined (CONFIG_MACH_SDM845_JUDYPN) || defined (CONFIG_MACH_SDM845_BETA) /* LGE_CHANGE, 2018-09-11, OIS,AF Driver update for LG EIS, yonghwan.lym@lge.com */
 		{
 			struct cam_actuator_ctrl_t *a_ctrl = NULL;
 			a_ctrl = container_of(io_master_info,
@@ -318,7 +320,7 @@ int32_t cam_actuator_apply_request(struct cam_req_mgr_apply_request *apply)
 	trace_cam_apply_req("Actuator", apply->request_id);
 
 	CAM_DBG(CAM_ACTUATOR, "Request Id: %lld", apply->request_id);
-
+	mutex_lock(&(a_ctrl->actuator_mutex));
 	if ((apply->request_id ==
 		a_ctrl->i2c_data.per_frame[request_id].request_id) &&
 		(a_ctrl->i2c_data.per_frame[request_id].is_settings_valid)
@@ -329,7 +331,7 @@ int32_t cam_actuator_apply_request(struct cam_req_mgr_apply_request *apply)
 			CAM_ERR(CAM_ACTUATOR,
 				"Failed in applying the request: %lld\n",
 				apply->request_id);
-			return rc;
+			goto release_mutex;
 		}
 	}
 	del_req_id = (request_id +
@@ -344,12 +346,14 @@ int32_t cam_actuator_apply_request(struct cam_req_mgr_apply_request *apply)
 			CAM_ERR(CAM_ACTUATOR,
 				"Fail deleting the req: %d err: %d\n",
 				del_req_id, rc);
-			return rc;
+			goto release_mutex;
 		}
 	} else {
 		CAM_DBG(CAM_ACTUATOR, "No Valid Req to clean Up");
 	}
 
+release_mutex:
+	mutex_unlock(&(a_ctrl->actuator_mutex));
 	return rc;
 }
 
@@ -369,6 +373,8 @@ int32_t cam_actuator_establish_link(
 		CAM_ERR(CAM_ACTUATOR, "Device data is NULL");
 		return -EINVAL;
 	}
+
+	mutex_lock(&(a_ctrl->actuator_mutex));
 	if (link->link_enable) {
 		a_ctrl->bridge_intf.link_hdl = link->link_hdl;
 		a_ctrl->bridge_intf.crm_cb = link->crm_cb;
@@ -376,6 +382,7 @@ int32_t cam_actuator_establish_link(
 		a_ctrl->bridge_intf.link_hdl = -1;
 		a_ctrl->bridge_intf.crm_cb = NULL;
 	}
+	mutex_unlock(&(a_ctrl->actuator_mutex));
 
 	return 0;
 }
@@ -405,7 +412,7 @@ int32_t cam_actuator_i2c_pkt_parse(struct cam_actuator_ctrl_t *a_ctrl,
 	uint32_t *offset = NULL;
 	uint32_t *cmd_buf = NULL;
 	uint64_t generic_ptr;
-#ifdef CONFIG_MACH_SDM845_JUDYPN /*LGE_CHANGE, Enable Lens Temp. Correction Function, 2018-08-17, hongs.lee@lge.com */
+#if defined (CONFIG_MACH_SDM845_JUDYPN) || defined (CONFIG_MACH_SDM845_BETA) /*LGE_CHANGE, Enable Lens Temp. Correction Function, 2018-08-17, hongs.lee@lge.com */
 	uint16_t ini_temp = 0;
 #endif
 	struct common_header      *cmm_hdr = NULL;
@@ -504,7 +511,7 @@ int32_t cam_actuator_i2c_pkt_parse(struct cam_actuator_ctrl_t *a_ctrl,
 				}
 				break;
 			default:
-#ifdef CONFIG_MACH_SDM845_JUDYPN // QCT original , need to block code for judy
+#if defined (CONFIG_MACH_SDM845_JUDYPN) || defined (CONFIG_MACH_SDM845_BETA) // QCT original , need to block code for judy
 				CAM_DBG(CAM_ACTUATOR,
 					"Received initSettings buffer");
 				i2c_data = &(a_ctrl->i2c_data);
@@ -538,7 +545,7 @@ int32_t cam_actuator_i2c_pkt_parse(struct cam_actuator_ctrl_t *a_ctrl,
 			a_ctrl->cam_act_state = CAM_ACTUATOR_CONFIG;
 		}
 
-#ifdef CONFIG_MACH_SDM845_JUDYPN
+#if defined (CONFIG_MACH_SDM845_JUDYPN) || defined (CONFIG_MACH_SDM845_BETA)
 		/*LGE_CHANGE_S, Enable Lens Temp. Correction Function, 2018-08-17, hongs.lee@lge.com */
 		// Enable Temperature Acquisition
 		act_i2c_write(a_ctrl, 0x8E, 0x15, CAMERA_SENSOR_I2C_TYPE_BYTE);
@@ -573,14 +580,14 @@ int32_t cam_actuator_i2c_pkt_parse(struct cam_actuator_ctrl_t *a_ctrl,
 		act_i2c_write(a_ctrl, 0x8C, 0xE9, CAMERA_SENSOR_I2C_TYPE_BYTE);
 		/*LGE_CHANGE_E, Enable Lens Temp. Correction Function, 2018-08-17, hongs.lee@lge.com */
 #else
-        if(a_ctrl->i2c_data.init_settings.is_settings_valid == 1){ // need to block code for judy, (LGE)
-            rc = cam_actuator_apply_settings(a_ctrl,
-                &a_ctrl->i2c_data.init_settings);
-            if (rc < 0) {
-                CAM_ERR(CAM_ACTUATOR, "Cannot apply Init settings");
-                return rc;
-            }
-        }
+		if(a_ctrl->i2c_data.init_settings.is_settings_valid == 1){ // need to block code for judy
+			rc = cam_actuator_apply_settings(a_ctrl,
+				&a_ctrl->i2c_data.init_settings);
+			if (rc < 0) {
+				CAM_ERR(CAM_ACTUATOR, "Cannot apply Init settings");
+				return rc;
+			}
+		}
 #endif
 
 		/* Delete the request even if the apply is failed */
@@ -697,6 +704,8 @@ void cam_actuator_shutdown(struct cam_actuator_ctrl_t *a_ctrl)
 	kfree(power_info->power_down_setting);
 	power_info->power_setting = NULL;
 	power_info->power_down_setting = NULL;
+	power_info->power_setting_size = 0;
+	power_info->power_down_setting_size = 0;
 
 	a_ctrl->cam_act_state = CAM_ACTUATOR_INIT;
 }
@@ -706,11 +715,18 @@ int32_t cam_actuator_driver_cmd(struct cam_actuator_ctrl_t *a_ctrl,
 {
 	int rc = 0;
 	struct cam_control *cmd = (struct cam_control *)arg;
+	struct cam_actuator_soc_private *soc_private = NULL;
+	struct cam_sensor_power_ctrl_t  *power_info = NULL;
 
 	if (!a_ctrl || !cmd) {
-		CAM_ERR(CAM_ACTUATOR, " Invalid Args");
+		CAM_ERR(CAM_ACTUATOR, "Invalid Args");
 		return -EINVAL;
 	}
+
+	soc_private =
+		(struct cam_actuator_soc_private *)a_ctrl->soc_info.soc_private;
+
+	power_info = &soc_private->power_info;
 
 	if (cmd->handle_type != CAM_HANDLE_USER_POINTER) {
 		CAM_ERR(CAM_ACTUATOR, "Invalid handle type: %d",
@@ -794,6 +810,12 @@ int32_t cam_actuator_driver_cmd(struct cam_actuator_ctrl_t *a_ctrl,
 		a_ctrl->bridge_intf.link_hdl = -1;
 		a_ctrl->bridge_intf.session_hdl = -1;
 		a_ctrl->cam_act_state = CAM_ACTUATOR_INIT;
+		kfree(power_info->power_setting);
+		kfree(power_info->power_down_setting);
+		power_info->power_setting = NULL;
+		power_info->power_down_setting = NULL;
+		power_info->power_down_setting_size = 0;
+		power_info->power_setting_size = 0;
 	}
 		break;
 	case CAM_QUERY_CAP: {
@@ -831,7 +853,7 @@ int32_t cam_actuator_driver_cmd(struct cam_actuator_ctrl_t *a_ctrl,
 			goto release_mutex;
 		}
 
-#ifdef CONFIG_MACH_SDM845_JUDYPN
+#if defined (CONFIG_MACH_SDM845_JUDYPN) || defined (CONFIG_MACH_SDM845_BETA) /* LGE_CHANGE, 2018-09-11, OIS,AF Driver update for LG EIS, yonghwan.lym@lge.com */
 		// AF Hall buffer reset
 		memset(&(a_ctrl->buf), 0, sizeof(struct msm_act_readout_buffer));
 #endif
@@ -905,6 +927,11 @@ int32_t cam_actuator_flush_request(struct cam_req_mgr_flush_request *flush_req)
 		return -EINVAL;
 	}
 
+	if (a_ctrl->i2c_data.per_frame == NULL) {
+		CAM_ERR(CAM_ACTUATOR, "i2c frame data is NULL");
+		return -EINVAL;
+	}
+
 	for (i = 0; i < MAX_PER_FRAME_ARRAY; i++) {
 		i2c_set = &(a_ctrl->i2c_data.per_frame[i]);
 
@@ -913,7 +940,9 @@ int32_t cam_actuator_flush_request(struct cam_req_mgr_flush_request *flush_req)
 			continue;
 
 		if (i2c_set->is_settings_valid == 1) {
+			mutex_lock(&(a_ctrl->actuator_mutex));
 			rc = delete_request(i2c_set);
+			mutex_unlock(&(a_ctrl->actuator_mutex));
 			if (rc < 0)
 				CAM_ERR(CAM_ACTUATOR,
 					"delete request: %lld rc: %d",
@@ -935,7 +964,7 @@ int32_t cam_actuator_flush_request(struct cam_req_mgr_flush_request *flush_req)
 	return rc;
 }
 
-#ifdef CONFIG_MACH_SDM845_JUDYPN /*LGE_CHANGE, Enable Lens Temp. Correction Function, 2018-08-17, hongs.lee@lge.com */
+#if defined (CONFIG_MACH_SDM845_JUDYPN) || defined (CONFIG_MACH_SDM845_BETA) /*LGE_CHANGE, Enable Lens Temp. Correction Function, 2018-08-17, hongs.lee@lge.com */
 int32_t act_i2c_read(struct cam_actuator_ctrl_t *a_ctrl, uint32_t RamAddr, uint16_t *RamData, enum camera_sensor_i2c_type data_type)
 {
 	int32_t ret = 0;

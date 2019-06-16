@@ -459,18 +459,20 @@ void dsi_ctrl_hw_cmn_video_engine_setup(struct dsi_ctrl_hw *ctrl,
 	pr_debug("[DSI_%d] Video engine setup done\n", ctrl->index);
 }
 
-void dsi_ctrl_hw_cmn_debug_bus(struct dsi_ctrl_hw *ctrl)
+void dsi_ctrl_hw_cmn_debug_bus(struct dsi_ctrl_hw *ctrl, u32 *entries, u32 size)
 {
-	u32 reg = 0;
+	u32 reg = 0, i = 0;
 
-	DSI_W32(ctrl, DSI_DEBUG_BUS_CTL, 0x181);
-
-	/* make sure that debug test point is enabled */
-	wmb();
-	reg = DSI_R32(ctrl, DSI_DEBUG_BUS_STATUS);
-
-	pr_err("[DSI_%d] debug bus status:0x%x\n", ctrl->index, reg);
+	for (i = 0; i < size; i++) {
+		DSI_W32(ctrl, DSI_DEBUG_BUS_CTL, entries[i]);
+		/* make sure that debug test point is enabled */
+		wmb();
+		reg = DSI_R32(ctrl, DSI_DEBUG_BUS_STATUS);
+		pr_err("[DSI_%d] debug bus ctrl: 0x%x status:0x%x\n",
+				ctrl->index, entries[i], reg);
+	}
 }
+
 /**
  * cmd_engine_setup() - setup dsi host controller for command mode
  * @ctrl:          Pointer to the controller host hardware.
@@ -777,7 +779,6 @@ u32 dsi_ctrl_hw_cmn_get_cmd_read_data(struct dsi_ctrl_hw *ctrl,
 		cnt = 4;
 
 	read_cnt = (DSI_R32(ctrl, DSI_RDBK_DATA_CTRL) >> 16);
-	SDE_EVT32(read_cnt);
 	ack_err = (rx_byte == 4) ? (read_cnt == 8) :
 			((read_cnt - 4) == (pkt_size + 6));
 
@@ -810,9 +811,6 @@ u32 dsi_ctrl_hw_cmn_get_cmd_read_data(struct dsi_ctrl_hw *ctrl,
 		else
 			*temp++ = ntohl(data);
 		off -= 4;
-		pr_err("%s: data = 0x%x and ntohl(data) = 0x%x\n",
-					__func__, data, ntohl(data));
-		SDE_EVT32(data);
 	}
 
 	if (repeated_bytes) {
@@ -821,7 +819,7 @@ u32 dsi_ctrl_hw_cmn_get_cmd_read_data(struct dsi_ctrl_hw *ctrl,
 	}
 
 	*hw_read_cnt = read_cnt;
-	pr_err("[DSI_%d] Read %d bytes\n", ctrl->index, rx_byte);
+	pr_debug("[DSI_%d] Read %d bytes\n", ctrl->index, rx_byte);
 	return rx_byte;
 }
 
@@ -1426,17 +1424,20 @@ void dsi_ctrl_hw_cmn_mask_error_intr(struct dsi_ctrl_hw *ctrl, u32 idx, bool en)
 	reg = DSI_R32(ctrl, 0x10c);
 
 	if (idx & BIT(DSI_FIFO_OVERFLOW)) {
-		if (en)
-			reg |= (0xf << 16);
-		else
-			reg &= ~(0xf << 16);
+		if (en) {
+			reg |= (0x1f << 16);
+			reg |= BIT(9);
+		} else {
+			reg &= ~(0x1f << 16);
+			reg &= ~BIT(9);
+		}
 	}
 
 	if (idx & BIT(DSI_FIFO_UNDERFLOW)) {
 		if (en)
-			reg |= (0xf << 26);
+			reg |= (0x1b << 26);
 		else
-			reg &= ~(0xf << 26);
+			reg &= ~(0x1b << 26);
 	}
 
 	if (idx & BIT(DSI_LP_Rx_TIMEOUT)) {
@@ -1498,4 +1499,17 @@ int dsi_ctrl_hw_cmn_wait_for_cmd_mode_mdp_idle(struct dsi_ctrl_hw *ctrl)
 		pr_err("%s: timed out waiting for idle\n", __func__);
 
 	return rc;
+}
+
+void dsi_ctrl_hw_cmn_set_continuous_clk(struct dsi_ctrl_hw *ctrl, bool enable)
+{
+	u32 reg = 0;
+
+	reg = DSI_R32(ctrl, DSI_LANE_CTRL);
+	if (enable)
+		reg |= BIT(28);
+	else
+		reg &= ~BIT(28);
+	DSI_W32(ctrl, DSI_LANE_CTRL, reg);
+	wmb(); /* make sure request is set */
 }

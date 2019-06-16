@@ -112,6 +112,17 @@ static int qpnp_pattern_scenario_index(enum qpnp_pattern_scenario scenario)
 	case PATTERN_SCENARIO_MISSED_NOTI_SECRETMODE_REPEAT_CYAN : return 26;
 	case PATTERN_SCENARIO_MISSED_NOTI_SECRETMODE_ONESHOT_CYAN : return 27;
 
+	case PATTERN_SCENARIO_MISSED_NOTI_REPEAT_GREEN_TMUS     :   return 28;
+	case PATTERN_SCENARIO_MISSED_NOTI_REPEAT_PINK_TMUS      :   return 29;
+	case PATTERN_SCENARIO_MISSED_NOTI_REPEAT_BLUE_TMUS      :   return 30;
+	case PATTERN_SCENARIO_MISSED_NOTI_REPEAT_ORANGE_TMUS    :   return 31;
+	case PATTERN_SCENARIO_MISSED_NOTI_REPEAT_YELLOW_TMUS    :   return 32;
+	case PATTERN_SCENARIO_MISSED_NOTI_REPEAT_TURQUOISE_TMUS :   return 33;
+	case PATTERN_SCENARIO_MISSED_NOTI_REPEAT_PURPLE_TMUS    :   return 34;
+	case PATTERN_SCENARIO_MISSED_NOTI_REPEAT_RED_TMUS       :   return 35;
+	case PATTERN_SCENARIO_MISSED_NOTI_REPEAT_LIME_TMUS      :   return 36;
+	case PATTERN_SCENARIO_MISSED_NOTI_REPEAT_URGENT_TMUS    :   return 37;
+
 #ifdef PATTERN_FOR_HIDDEN_MENU
 /* If PATTERN_FOR_HIDDEN_MENU is enabled,
  * the pattern numbers 0~15 of seek-bar are mapped to ...
@@ -415,7 +426,7 @@ static ssize_t qpnp_pattern_input(const char* string_input, size_t string_size)
 				"%d,%d,%d,%d,%d,%d,%d,%d,"
 				"%d,%d,%d,%d,%d,%d,%d,%d,"
 				"%d,%d,%d,%d,%d,%d,%d,%d,"
-				"%d,%d,%d,%d,%d,%d,%d,%d,%d,0x%02x",
+				"%d,%d,%d,%d,%d,%d,%d,%d,%d,%d",
 		/* 0 .................................................. 47 */   // [LUT TABLE]
 		&input_pattern[ 0], &input_pattern[ 1], &input_pattern[ 2],
 		&input_pattern[ 3], &input_pattern[ 4], &input_pattern[ 5],
@@ -434,7 +445,7 @@ static ssize_t qpnp_pattern_input(const char* string_input, size_t string_size)
 		&input_pattern[42], &input_pattern[43], &input_pattern[44],
 		&input_pattern[45], &input_pattern[46], &input_pattern[47],
 		/*         [START]            [LENGTH]                     */
-		&input_pattern[48], &input_pattern[48],                         // [RED]
+		&input_pattern[48], &input_pattern[49],                         // [RED]
 		&input_pattern[50], &input_pattern[51],                         // [GREEN]
 		&input_pattern[52], &input_pattern[53],                         // [BLUE]
 		/*      [PAUSE_LO]          [PAUSE_HI]        [PAUSE_STEP] */   // [R/G/B COMMON]
@@ -454,7 +465,7 @@ static ssize_t qpnp_pattern_input(const char* string_input, size_t string_size)
 
 static ssize_t qpnp_pattern_blink(const char* string_blink, size_t string_size)
 {
-	int     blink_rgb       = 0;
+	uint    blink_rgb       = 0;
 	int     blink_on        = 0;
 	int     blink_off       = 0;
 
@@ -499,7 +510,7 @@ static ssize_t qpnp_pattern_blink(const char* string_blink, size_t string_size)
 
 static ssize_t qpnp_pattern_onoff(const char* string_onoff, size_t string_size)
 {
-	int     onoff_rgb        = 0;
+	uint    onoff_rgb        = 0;
 	int     onoff_pattern [] = {
 		LPG_NEED_TO_SET, LPG_NEED_TO_SET,     // [0][1] : Solid color for RED
 		LPG_NEED_TO_SET, LPG_NEED_TO_SET,     // [2][3] : Solid color for GREEN

@@ -20,13 +20,20 @@
 #include "cam_res_mgr_api.h"
 
 #define LIMIT_STATUS_POLLING	(15)
+#if defined (CONFIG_MACH_SDM845_JUDYPN) || defined (CONFIG_MACH_SDM845_BETA)
 extern int32_t lgit_imx363_init_set_onsemi_ois(struct cam_ois_ctrl_t *o_ctrl);
 extern int lgit_imx363_onsemi_ois_poll_ready(int limit);
+#else
+extern int32_t lgit_imx351_init_set_rohm_ois(struct cam_ois_ctrl_t *o_ctrl);
+extern int lgit_imx351_rohm_ois_poll_ready(int limit);
+#endif
 extern void msm_ois_create_sysfs(void);
 extern void msm_ois_destroy_sysfs(void);
+/* LGE_CHANGE_S, 2018-09-11, OIS,AF Driver update for LG EIS, yonghwan.lym@lge.com */
 extern int msm_stopGyroThread(void);
 extern int parse_ois_userdata(struct cam_cmd_ois_userdata *ois_userdata,
 		struct cam_ois_ctrl_t *o_ctrl);
+/* LGE_CHANGE_E, 2018-09-11, OIS,AF Driver update for LG EIS, yonghwan.lym@lge.com */
 
 int32_t cam_ois_construct_default_power_setting(
 	struct cam_sensor_power_ctrl_t *power_info)
@@ -64,6 +71,8 @@ int32_t cam_ois_construct_default_power_setting(
 
 free_power_settings:
 	kfree(power_info->power_setting);
+	power_info->power_setting = NULL;
+	power_info->power_setting_size = 0;
 	return rc;
 }
 
@@ -197,10 +206,12 @@ int cam_ois_power_down(struct cam_ois_ctrl_t *o_ctrl)
 		return -EINVAL;
 	}
 
+	/* LGE_CHANGE_S, 2018-09-11, OIS,AF Driver update for LG EIS, yonghwan.lym@lge.com */
 	if(o_ctrl->ois_thread_running == true) {
 		msm_stopGyroThread();
 		o_ctrl->ois_thread_running = false;
 	}
+	/* LGE_CHANGE_E, 2018-09-11, OIS,AF Driver update for LG EIS, yonghwan.lym@lge.com */
 
 	soc_private =
 		(struct cam_ois_soc_private *)o_ctrl->soc_info.soc_private;
@@ -214,7 +225,7 @@ int cam_ois_power_down(struct cam_ois_ctrl_t *o_ctrl)
 		return -EINVAL;
 	}
 
-	rc = msm_camera_power_down(power_info, soc_info);
+	rc = cam_sensor_util_power_down(power_info, soc_info);
 	if (rc) {
 		CAM_ERR(CAM_OIS, "power down the core is failed:%d", rc);
 		return rc;
@@ -259,7 +270,11 @@ static int cam_ois_apply_settings(struct cam_ois_ctrl_t *o_ctrl,
 			}
 		} else if (i2c_list->op_code == CAM_SENSOR_I2C_POLL) {
 /* LGE_CHANGE_S, use LGE POLL function, 2018-01-16, hongs.lee@lge.com */
+#if defined (CONFIG_MACH_SDM845_JUDYPN) || defined (CONFIG_MACH_SDM845_BETA)
 			rc = lgit_imx363_onsemi_ois_poll_ready(LIMIT_STATUS_POLLING);
+#else
+			rc = lgit_imx351_rohm_ois_poll_ready(LIMIT_STATUS_POLLING);
+#endif
 			if (rc < 0) {
 				CAM_ERR(CAM_OIS, "i2c poll apply setting Fail");
 				return rc;
@@ -475,7 +490,7 @@ static int cam_ois_pkt_parse(struct cam_ois_ctrl_t *o_ctrl, void *arg)
 	struct cam_ois_soc_private     *soc_private =
 		(struct cam_ois_soc_private *)o_ctrl->soc_info.soc_private;
 	struct cam_sensor_power_ctrl_t  *power_info = &soc_private->power_info;
-	struct cam_cmd_ois_userdata *ois_userdata;
+	struct cam_cmd_ois_userdata *ois_userdata; /* LGE_CHANGE, 2018-09-11, OIS,AF Driver update for LG EIS, yonghwan.lym@lge.com */
 
 	ioctl_ctrl = (struct cam_control *)arg;
 	if (copy_from_user(&dev_config, (void __user *) ioctl_ctrl->handle,
@@ -626,8 +641,13 @@ static int cam_ois_pkt_parse(struct cam_ois_ctrl_t *o_ctrl, void *arg)
 		}
 
 		//rc = cam_ois_apply_settings(o_ctrl, &o_ctrl->i2c_init_data); // QCT original , need to block code for judy
+		CAM_ERR(CAM_OIS, "FW Downloading again");
+#if defined (CONFIG_MACH_SDM845_JUDYPN) || defined (CONFIG_MACH_SDM845_BETA)
 		rc = lgit_imx363_init_set_onsemi_ois(o_ctrl);
-		if (rc) {
+#else
+		rc = lgit_imx351_init_set_rohm_ois(o_ctrl);
+#endif
+		if (rc < 0) {
 			CAM_ERR(CAM_OIS, "Cannot apply Init settings");
 			goto pwr_dwn;
 		}
@@ -688,6 +708,7 @@ static int cam_ois_pkt_parse(struct cam_ois_ctrl_t *o_ctrl, void *arg)
 				"Fail deleting Mode data: rc: %d", rc);
 		CAM_ERR(CAM_OIS, "Done With Update");
 		break;
+	/* LGE_CHANGE_S, 2018-09-11, OIS,AF Driver update for LG EIS, yonghwan.lym@lge.com */
 	case CAM_OIS_PACKET_OPCODE_OIS_USERDATA:
 		if (o_ctrl->cam_ois_state < CAM_OIS_CONFIG) {
 			rc = -EINVAL;
@@ -723,6 +744,7 @@ static int cam_ois_pkt_parse(struct cam_ois_ctrl_t *o_ctrl, void *arg)
 		ois_userdata = (struct cam_cmd_ois_userdata *)cmd_buf;
 		parse_ois_userdata(ois_userdata, o_ctrl);
 		break;
+	/* LGE_CHANGE_E, 2018-09-11, OIS,AF Driver update for LG EIS, yonghwan.lym@lge.com */
 	default:
 		break;
 	}
@@ -736,10 +758,9 @@ pwr_dwn:
 void cam_ois_shutdown(struct cam_ois_ctrl_t *o_ctrl)
 {
 	int rc = 0;
-	struct cam_ois_soc_private  *soc_private =
+	struct cam_ois_soc_private *soc_private =
 		(struct cam_ois_soc_private *)o_ctrl->soc_info.soc_private;
-	struct cam_sensor_power_ctrl_t *power_info =
-		&soc_private->power_info;
+	struct cam_sensor_power_ctrl_t *power_info = &soc_private->power_info;
 
 	if (o_ctrl->cam_ois_state == CAM_OIS_INIT)
 		return;
@@ -760,15 +781,21 @@ void cam_ois_shutdown(struct cam_ois_ctrl_t *o_ctrl)
 		o_ctrl->bridge_intf.session_hdl = -1;
 	}
 
-	if (power_info->power_setting) {
-		kfree(power_info->power_setting);
-		power_info->power_setting = NULL;
-	}
+	if (o_ctrl->i2c_mode_data.is_settings_valid == 1)
+		delete_request(&o_ctrl->i2c_mode_data);
 
-	if (power_info->power_down_setting) {
-		kfree(power_info->power_down_setting);
-		power_info->power_down_setting = NULL;
-	}
+	if (o_ctrl->i2c_calib_data.is_settings_valid == 1)
+		delete_request(&o_ctrl->i2c_calib_data);
+
+	if (o_ctrl->i2c_init_data.is_settings_valid == 1)
+		delete_request(&o_ctrl->i2c_init_data);
+
+	kfree(power_info->power_setting);
+	kfree(power_info->power_down_setting);
+	power_info->power_setting = NULL;
+	power_info->power_down_setting = NULL;
+	power_info->power_down_setting_size = 0;
+	power_info->power_setting_size = 0;
 
 	o_ctrl->cam_ois_state = CAM_OIS_INIT;
 }
@@ -782,13 +809,13 @@ void cam_ois_shutdown(struct cam_ois_ctrl_t *o_ctrl)
  */
 int cam_ois_driver_cmd(struct cam_ois_ctrl_t *o_ctrl, void *arg)
 {
-	int                            rc = 0;
-	struct cam_ois_query_cap_t     ois_cap = {0};
-	struct cam_control            *cmd = (struct cam_control *)arg;
-	struct cam_ois_soc_private     *soc_private = NULL;
+	int                              rc = 0;
+	struct cam_ois_query_cap_t       ois_cap = {0};
+	struct cam_control              *cmd = (struct cam_control *)arg;
+	struct cam_ois_soc_private      *soc_private = NULL;
 	struct cam_sensor_power_ctrl_t  *power_info = NULL;
 
-	if (!o_ctrl || !arg) {
+	if (!o_ctrl || !cmd) {
 		CAM_ERR(CAM_OIS, "Invalid arguments");
 		return -EINVAL;
 	}
@@ -799,7 +826,8 @@ int cam_ois_driver_cmd(struct cam_ois_ctrl_t *o_ctrl, void *arg)
 		return -EINVAL;
 	}
 
-	soc_private = (struct cam_ois_soc_private *)o_ctrl->soc_info.soc_private;
+	soc_private =
+		(struct cam_ois_soc_private *)o_ctrl->soc_info.soc_private;
 	power_info = &soc_private->power_info;
 
 	mutex_lock(&(o_ctrl->ois_mutex));
@@ -874,15 +902,23 @@ int cam_ois_driver_cmd(struct cam_ois_ctrl_t *o_ctrl, void *arg)
 		o_ctrl->bridge_intf.session_hdl = -1;
 		o_ctrl->cam_ois_state = CAM_OIS_INIT;
 
-		if (power_info->power_setting) {
-			kfree(power_info->power_setting);
-			power_info->power_setting = NULL;
-		}
+		kfree(power_info->power_setting);
+		kfree(power_info->power_down_setting);
 
-		if (power_info->power_down_setting) {
-			kfree(power_info->power_down_setting);
-			power_info->power_down_setting = NULL;
-		}
+		power_info->power_setting = NULL;
+		power_info->power_down_setting = NULL;
+		power_info->power_down_setting_size = 0;
+		power_info->power_setting_size = 0;
+
+		if (o_ctrl->i2c_mode_data.is_settings_valid == 1)
+			delete_request(&o_ctrl->i2c_mode_data);
+
+		if (o_ctrl->i2c_calib_data.is_settings_valid == 1)
+			delete_request(&o_ctrl->i2c_calib_data);
+
+		if (o_ctrl->i2c_init_data.is_settings_valid == 1)
+			delete_request(&o_ctrl->i2c_init_data);
+
 		break;
 	case CAM_STOP_DEV:
 		if (o_ctrl->cam_ois_state != CAM_OIS_START) {

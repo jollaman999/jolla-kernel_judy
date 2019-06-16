@@ -16,6 +16,7 @@
 
 #include <linux/slab.h>
 #include <linux/device.h>
+#include <linux/delay.h>
 
 #include "dp_usbpd.h"
 
@@ -259,7 +260,7 @@ static void dp_usbpd_connect_cb(struct usbpd_svid_handler *hdlr)
 
 	pr_info("\n");
 
-#ifdef CONFIG_LGE_DISPLAY_SUPPORT_DP_KOPIN
+#if defined(CONFIG_LGE_DISPLAY_NOT_SUPPORT_DISPLAYPORT) && defined(CONFIG_LGE_DISPLAY_SUPPORT_DP_KOPIN)
 	if (!is_kopin)
 		return;
 #endif
@@ -323,11 +324,44 @@ end:
 	return ret;
 }
 
+
+static int dp_usbpd_get_ss_lanes(struct dp_usbpd_private *pd)
+{
+	int rc = 0;
+	int timeout = 250;
+
+	/*
+	 * By default, USB reserves two lanes for Super Speed.
+	 * Which means DP has remaining two lanes to operate on.
+	 * If multi-function is not supported, request USB to
+	 * release the Super Speed lanes so that DP can use
+	 * all four lanes in case DPCD indicates support for
+	 * four lanes.
+	 */
+	if (!pd->dp_usbpd.multi_func) {
+		while (timeout) {
+			rc = pd->svid_handler.request_usb_ss_lane(
+					pd->pd, &pd->svid_handler);
+			if (rc != -EBUSY)
+				break;
+
+			pr_warn("USB busy, retry\n");
+
+			/* wait for hw recommended delay for usb */
+			msleep(20);
+			timeout--;
+		}
+	}
+
+	return rc;
+}
+
 static void dp_usbpd_response_cb(struct usbpd_svid_handler *hdlr, u8 cmd,
 				enum usbpd_svdm_cmd_type cmd_type,
 				const u32 *vdos, int num_vdos)
 {
 	struct dp_usbpd_private *pd;
+	int rc = 0;
 
 	pd = container_of(hdlr, struct dp_usbpd_private, svid_handler);
 
@@ -389,17 +423,11 @@ static void dp_usbpd_response_cb(struct usbpd_svid_handler *hdlr, u8 cmd,
 
 		pd->dp_usbpd.orientation = usbpd_get_plug_orientation(pd->pd);
 
-		/*
-		 * By default, USB reserves two lanes for Super Speed.
-		 * Which means DP has remaining two lanes to operate on.
-		 * If multi-function is not supported, request USB to
-		 * release the Super Speed lanes so that DP can use
-		 * all four lanes in case DPCD indicates support for
-		 * four lanes.
-		 */
-		if (!pd->dp_usbpd.multi_func)
-			pd->svid_handler.request_usb_ss_lane(pd->pd,
-				&pd->svid_handler);
+		rc = dp_usbpd_get_ss_lanes(pd);
+		if (rc) {
+			pr_err("failed to get SuperSpeed lanes\n");
+			break;
+		}
 
 		if (pd->dp_cb && pd->dp_cb->configure)
 			pd->dp_cb->configure(pd->dev);
@@ -457,6 +485,20 @@ error:
 	return rc;
 }
 
+static enum plug_orientation dp_usbpd_get_orientation(struct dp_usbpd *dp_usbpd)
+{
+	struct dp_usbpd_private *pd;
+
+	if (!dp_usbpd) {
+		pr_err("invalid dp_usbpd\n");
+		return ORIENTATION_NONE;
+	}
+
+	pd = container_of(dp_usbpd, struct dp_usbpd_private, dp_usbpd);
+
+	return usbpd_get_plug_orientation(pd->pd);
+}
+
 struct dp_usbpd *dp_usbpd_get(struct device *dev, struct dp_usbpd_cb *cb)
 {
 	int rc = 0;
@@ -507,6 +549,7 @@ struct dp_usbpd *dp_usbpd_get(struct device *dev, struct dp_usbpd_cb *cb)
 	dp_usbpd = &usbpd->dp_usbpd;
 	dp_usbpd->simulate_connect = dp_usbpd_simulate_connect;
 	dp_usbpd->simulate_attention = dp_usbpd_simulate_attention;
+	dp_usbpd->get_orientation = dp_usbpd_get_orientation;
 
 	return dp_usbpd;
 error:

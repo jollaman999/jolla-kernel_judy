@@ -227,10 +227,10 @@
 				};
 
 				iova-mem-region-shared {
-					/* Shared region is 100MB long ,LGE_CHANGE, 100MB -> 200MB*/
+					/* Shared region is 100MB long */
 					iova-region-name = "shared";
 					iova-region-start = <0x7400000>;
-					iova-region-len = <0xc800000>;
+					iova-region-len = <0x6400000>;
 					iova-region-id = <0x1>;
 					iova-granularity = <0x15>;
 					status = "ok";
@@ -239,7 +239,7 @@
 				iova-mem-region-secondary-heap {
 					/* Secondary heap region is 1MB long */
 					iova-region-name = "secheap";
-					iova-region-start = <0x13c00000>;
+					iova-region-start = <0xd800000>;
 					iova-region-len = <0x100000>;
 					iova-region-id = <0x4>;
 					status = "ok";
@@ -248,17 +248,17 @@
 				iova-mem-region-io {
 					/* IO region is approximately 3 GB */
 					iova-region-name = "io";
-					iova-region-start = <0x13d11000>;
-					iova-region-len = <0xcc2ef000>;
+					iova-region-start = <0xda00000>;
+					iova-region-len = <0xd2500000>;
 					iova-region-id = <0x3>;
 					status = "ok";
 				};
 
 				iova-mem-qdss-region {
-					/* qdss region is approximately 64K */
+					/* qdss region is approximately 1MB */
 					iova-region-name = "qdss";
-					iova-region-start = <0x13d00000>;
-					iova-region-len = <0x10000>;
+					iova-region-start = <0xd900000>;
+					iova-region-len = <0x100000>;
 					iova-region-id = <0x5>;
 					qdss-phy-addr = <0x16790000>;
 					status = "ok";

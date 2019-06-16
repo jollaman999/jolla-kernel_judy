@@ -160,7 +160,7 @@ static int CalData[6][SZ_CALDATA_UNIT];
 
 #define ON_SENSOR                   1
 #define OFF_SENSOR                  2
-#define PATH_CAPSENSOR_CAL  "/vendor/sns/sar_controller_cal.dat"
+#define PATH_CAPSENSOR_CAL  "/mnt/vendor/sns/sar_controller_cal.dat"
 
 static struct i2c_driver atmf04_driver;
 static struct workqueue_struct *atmf04_workqueue;

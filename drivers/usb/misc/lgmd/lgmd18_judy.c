@@ -10,7 +10,8 @@ struct lgmd18_judy {
 static const char * const iio_ev_dir_text[] = {
 	[IIO_EV_DIR_EITHER] = "either",
 	[IIO_EV_DIR_RISING] = "rising",
-	[IIO_EV_DIR_FALLING] = "falling"
+	[IIO_EV_DIR_FALLING] = "falling",
+	[IIO_EV_DIR_NONE] = "none",
 };
 
 static int lgmd18_read_raw(struct iio_dev *indio_dev,
@@ -52,9 +53,22 @@ static int lgmd18_read_raw(struct iio_dev *indio_dev,
 			}
 		}
 
-		qpnp_vadc_read(lgmd18->vadc_chip,
-			       adc->param.channel,
-			       &result);
+		if (fusb252_get_ovp_state(judy->fusb252_inst) > 0) {
+			switch (lgmd18->adc_chans[0].bias) {
+			case PIN_CONFIG_BIAS_PULL_UP:
+				result.physical = lgmd18->adc_chans[0].blue_thr_uv;
+				break;
+			default:
+				qpnp_vadc_read(lgmd18->vadc_chip,
+					       adc->param.channel,
+					       &result);
+				break;
+			}
+		} else {
+			qpnp_vadc_read(lgmd18->vadc_chip,
+				       adc->param.channel,
+				       &result);
+		}
 
 		if (fusb252_flag != FUSB252_MODE_SBU_USBID) {
 			if (fusb252_flag == FUSB252_FLAG_SBU_DISABLE) {
@@ -68,18 +82,9 @@ static int lgmd18_read_raw(struct iio_dev *indio_dev,
 			}
 		}
 
-		if (adc->param.state_request == ADC_TM_LOW_THR_ENABLE) {
-			dev_info(lgmd18->dev, "%s: ADC PARAM low: %d, high: %d,"
-				"irq: %d\n", __func__, adc->param.low_thr,
-				adc->param.high_thr, adc->param.state_request);
-			ret = qpnp_adc_tm_channel_measure(lgmd18->adc_tm_chip,
+		if (adc->param.state_request == ADC_TM_LOW_THR_ENABLE)
+			qpnp_adc_tm_channel_measure(lgmd18->adc_tm_chip,
 						    &adc->param);
-			if (ret) {
-				dev_err(lgmd18->dev, "%s: request ADC error %d\n",
-					__func__, ret);
-				goto out;
-			}
-		}
 
 		*val = result.physical;
 		ret = IIO_VAL_INT;
@@ -93,7 +98,7 @@ static int lgmd18_read_raw(struct iio_dev *indio_dev,
 	mutex_unlock(&indio_dev->mlock);
 
 out:
-	dev_info(lgmd18->dev, "%s: chan(%d), %d\n", __func__,
+	dev_dbg(lgmd18->dev, "%s: chan(%d), %d\n", __func__,
 		chan->channel, (ret < 0) ? ret : *val);
 
 	return ret;
@@ -135,7 +140,7 @@ static int lgmd18_read_event_config(struct iio_dev *indio_dev,
 
 	mutex_unlock(&indio_dev->mlock);
 
-	dev_info(lgmd18->dev, "%s: chan(%d), dir(%s), %d\n", __func__,
+	dev_dbg(lgmd18->dev, "%s: chan(%d), dir(%s), %d\n", __func__,
 		chan->channel, iio_ev_dir_text[dir], ret);
 
 	return ret;
@@ -159,9 +164,10 @@ static int lgmd18_write_event_config(struct iio_dev *indio_dev,
 		alarm_cancel(&adc->timer);
 		adc->timer.node.expires = ms_to_ktime(0);
 
-		adc->param.state_request = ADC_TM_HIGH_LOW_THR_DISABLE;
 		qpnp_adc_tm_disable_chan_meas(lgmd18->adc_tm_chip,
 					      &adc->param);
+		adc->param.state_request = ADC_TM_HIGH_LOW_THR_DISABLE;
+
 		if (!state) {
 			if (dir == IIO_EV_DIR_RISING)
 				fusb252_get(judy->fusb252_inst,
@@ -193,16 +199,8 @@ static int lgmd18_write_event_config(struct iio_dev *indio_dev,
 				    FUSB252_FLAG_SBU_DISABLE);
 
 			adc->param.state_request = ADC_TM_LOW_THR_ENABLE;
-			dev_info(lgmd18->dev, "%s: ADC PARAM low: %d, high: %d,"
-				"irq: %d\n", __func__, adc->param.low_thr,
-				adc->param.high_thr, adc->param.state_request);
-			 ret = qpnp_adc_tm_channel_measure(lgmd18->adc_tm_chip,
+			qpnp_adc_tm_channel_measure(lgmd18->adc_tm_chip,
 						    &adc->param);
-			if (ret) {
-				dev_err(lgmd18->dev, "%s: request ADC error %d\n",
-					__func__, ret);
-				break;
-			}
 			break;
 		default:
 			ret = -EINVAL;
@@ -217,7 +215,7 @@ static int lgmd18_write_event_config(struct iio_dev *indio_dev,
 
 	mutex_unlock(&indio_dev->mlock);
 
-	dev_info(lgmd18->dev, "%s: chan(%d), dir(%s), state(%d), %d\n", __func__,
+	dev_dbg(lgmd18->dev, "%s: chan(%d), dir(%s), state(%d), %d\n", __func__,
 		chan->channel, iio_ev_dir_text[dir], state, ret);
 
 	return ret;
@@ -319,6 +317,7 @@ static void lgmd18_threshold_notification(enum qpnp_tm_state state, void *ctx)
 		 (state == ADC_TM_HIGH_STATE) ? "rising" : "falling");
 
 	mutex_lock(&indio_dev->mlock);
+	qpnp_adc_tm_disable_chan_meas(lgmd18->adc_tm_chip, &adc->param);
 	adc->param.state_request = ADC_TM_HIGH_LOW_THR_DISABLE;
 	mutex_unlock(&indio_dev->mlock);
 
@@ -480,6 +479,33 @@ static const struct iio_chan_spec lgmd18_channels[] = {
 	LGMD18_ADC_CHAN_VOLT(0, lgmd18_events, ARRAY_SIZE(lgmd18_events)),
 };
 
+static int lgmd18_probe_md(struct lgmd18 *lgmd18)
+{
+	struct lgmd18_judy *judy = lgmd18->private_data;
+	int ovp;
+
+	ovp = fusb252_get_ovp_state(judy->fusb252_inst);
+	if (ovp > 0) {
+		dev_info(lgmd18->dev, "OVP detected on FUSB252.\n");
+		return true;
+	}
+
+	return false;
+}
+
+static void lgmd18_shutdown(struct lgmd18 *lgmd18)
+{
+	int i;
+
+	for (i = 0; i < lgmd18->num_channels; i++) {
+		lgmd18_write_event_config(lgmd18->adc_chans[i].indio_dev,
+					  lgmd18->adc_chans[i].chan_spec,
+					  IIO_EV_TYPE_THRESH,
+					  IIO_EV_DIR_NONE,
+					  0);
+	}
+}
+
 int lgmd18_init(struct lgmd18 *lgmd18)
 {
 	struct device *dev = lgmd18->dev;
@@ -523,6 +549,9 @@ int lgmd18_init(struct lgmd18 *lgmd18)
 	lgmd18->private_data = judy;
 	lgmd18->info = &lgmd18_info;
 	lgmd18->channels = lgmd18_channels;
+
+	lgmd18->probe_md = lgmd18_probe_md;
+	lgmd18->shutdown = lgmd18_shutdown;
 
 	return 0;
 }

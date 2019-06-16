@@ -697,10 +697,12 @@ static int mmc_ext_csd_open(struct inode *inode, struct file *filp)
 		if (ext_csd_rev >= 7) {
 			buf_for_health_report = kmalloc(66, GFP_KERNEL);
 			if (!buf_for_health_report)
-			return -ENOMEM;
+				return -ENOMEM;
 			buf_for_firmwware_version = kmalloc(18, GFP_KERNEL);
-			if (!buf_for_firmwware_version)
-			return -ENOMEM;
+			if (!buf_for_firmwware_version) {
+				kfree(buf_for_health_report);
+				return -ENOMEM;
+			}
 			seq_printf(s, "[493] Supported modes, supported_modes: 0x%02x\n", ext_csd[493]);
 			seq_printf(s, "[492] FFU features, FFU_FEATURES: 0x%02x\n", ext_csd[492]);
 			seq_printf(s, "[491] Operation codes timeout, operation_code_timeout: 0x%02x\n", ext_csd[491]);

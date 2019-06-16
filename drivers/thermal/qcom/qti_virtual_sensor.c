@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2017-2018, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -78,28 +78,40 @@ static const struct virtual_sensor_data qti_virtual_sensors[] = {
 		.logic = VIRT_WEIGHTED_AVG,
 	},
 #elif defined(CONFIG_MACH_SDM845_JUDYP)
-	/* 0.39*xo + 0.51*quiet + 2.69 */
+	/* -0.15*xo + 1.04*quiet + 6.7 */
 	{
 		.virt_zone_name = "vts-virt-therm",
 		.num_sensors = 2,
 		.sensor_names = {"xo-therm-adc",
 				"quiet-therm-adc"},
 		.coefficient_ct = 2,
-		.coefficients = {39, 51},
-		.avg_offset = 269000,
+		.coefficients = {-15, 104},
+		.avg_offset = 670000,
 		.avg_denominator = 100,
 		.logic = VIRT_WEIGHTED_AVG,
 	},
 #elif defined(CONFIG_MACH_SDM845_JUDYPN)
-	/* 0.43*xo + 0.37*quiet + 5.54 */
 	{
 		.virt_zone_name = "vts-virt-therm",
 		.num_sensors = 2,
 		.sensor_names = {"xo-therm-adc",
 				"quiet-therm-adc"},
 		.coefficient_ct = 2,
-		.coefficients = {43, 37},
-		.avg_offset = 554000,
+		.coefficients = {0, 1},
+		.avg_offset = 0,
+		.avg_denominator = 1,
+		.logic = VIRT_WEIGHTED_AVG,
+	},
+#elif defined(CONFIG_MACH_SDM845_BETA)
+	/* 0.02*xo + 0.79*quiet + 5.43 */
+	{
+		.virt_zone_name = "vts-virt-therm",
+		.num_sensors = 2,
+		.sensor_names = {"xo-therm-adc",
+				"quiet-therm-adc"},
+		.coefficient_ct = 2,
+		.coefficients = {2, 79},
+		.avg_offset = 543000,
 		.avg_denominator = 100,
 		.logic = VIRT_WEIGHTED_AVG,
 	},
@@ -116,6 +128,44 @@ static const struct virtual_sensor_data qti_virtual_sensors[] = {
 		.logic = VIRT_WEIGHTED_AVG,
 	},
 #endif
+	{
+		.virt_zone_name = "deca-cpu-max-step",
+		.num_sensors = 10,
+		.sensor_names = {"apc0-cpu0-usr",
+				"apc0-cpu1-usr",
+				"apc0-cpu2-usr",
+				"apc0-cpu3-usr",
+				"apc0-l2-usr",
+				"apc1-cpu0-usr",
+				"apc1-cpu1-usr",
+				"apc1-cpu2-usr",
+				"apc1-cpu3-usr",
+				"apc1-l2-usr"},
+		.logic = VIRT_MAXIMUM,
+	},
+	{
+		.virt_zone_name = "hepta-cpu-max-step",
+		.num_sensors = 7,
+		.sensor_names = {"apc1-cpu0-usr",
+				"apc1-cpu1-usr",
+				"apc1-cpu2-usr",
+				"apc1-cpu3-usr",
+				"apc1-mhm-usr",
+				"apc1-l2-usr",
+				"cpuss0-usr"},
+		.logic = VIRT_MAXIMUM,
+	},
+	{
+		.virt_zone_name = "hexa-cpu-max-step",
+		.num_sensors = 6,
+		.sensor_names = {"apc1-cpu0-usr",
+				"apc1-cpu1-usr",
+				"apc1-cpu2-usr",
+				"apc1-cpu3-usr",
+				"cpuss0-usr",
+				"cpuss1-usr"},
+		.logic = VIRT_MAXIMUM,
+	},
 };
 
 int qti_virtual_sensor_register(struct device *dev)

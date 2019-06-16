@@ -40,7 +40,6 @@
 #include "dp_debug.h"
 
 #ifndef CONFIG_LGE_DISPLAY_NOT_SUPPORT_DISPLAYPORT
-//will change "CONFIG_LGE_DISPLAY_COMMON - DP enable
 #include "../lge/dp/lge_dp.h"
 #endif
 
@@ -58,11 +57,6 @@ struct dp_hdcp {
 	void *hdcp1;
 	void *hdcp2;
 
-	int enc_lvl;
-
-	bool auth_state;
-	bool hdcp1_present;
-	bool hdcp2_present;
 	bool feature_enabled;
 };
 
@@ -105,7 +99,6 @@ struct dp_display_private {
 	struct work_struct attention_work;
 	struct mutex hdcp_mutex;
 	struct mutex session_lock;
-	int hdcp_status;
 	unsigned long audio_status;
 };
 
@@ -121,9 +114,8 @@ static bool dp_display_framework_ready(struct dp_display_private *dp)
 
 static inline bool dp_display_is_hdcp_enabled(struct dp_display_private *dp)
 {
-	return dp->hdcp.feature_enabled &&
-		(dp->hdcp.hdcp1_present || dp->hdcp.hdcp2_present) &&
-		dp->hdcp.ops;
+	return dp->hdcp.feature_enabled && dp->link->hdcp_status.hdcp_version
+		&& dp->hdcp.ops;
 }
 
 static irqreturn_t dp_display_irq(int irq, void *dev_id)
@@ -168,32 +160,25 @@ static void dp_display_hdcp_cb_work(struct work_struct *work)
 
 	ops = dp->hdcp.ops;
 
-	switch (dp->hdcp_status) {
-	case HDCP_STATE_AUTHENTICATING:
-		pr_debug("start authenticaton\n");
+	pr_debug("%s: %s\n",
+		sde_hdcp_version(dp->link->hdcp_status.hdcp_version),
+		sde_hdcp_state_name(dp->link->hdcp_status.hdcp_state));
 
+	switch (dp->link->hdcp_status.hdcp_state) {
+	case HDCP_STATE_AUTHENTICATING:
 		if (dp->hdcp.ops && dp->hdcp.ops->authenticate)
 			rc = dp->hdcp.ops->authenticate(dp->hdcp.data);
-
-		break;
-	case HDCP_STATE_AUTHENTICATED:
-		pr_debug("hdcp authenticated\n");
-		dp->hdcp.auth_state = true;
 		break;
 	case HDCP_STATE_AUTH_FAIL:
-		dp->hdcp.auth_state = false;
-
 		if (dp->power_on) {
-			pr_debug("Reauthenticating\n");
 			if (ops && ops->reauthenticate) {
 				rc = ops->reauthenticate(dp->hdcp.data);
 				if (rc)
-					pr_err("reauth failed rc=%d\n", rc);
+					pr_err("failed rc=%d\n", rc);
 			}
 		} else {
 			pr_debug("not reauthenticating, cable disconnected\n");
 		}
-
 		break;
 	default:
 		break;
@@ -201,7 +186,7 @@ static void dp_display_hdcp_cb_work(struct work_struct *work)
 }
 
 static void dp_display_notify_hdcp_status_cb(void *ptr,
-		enum sde_hdcp_states status)
+		enum sde_hdcp_state state)
 {
 	struct dp_display_private *dp = ptr;
 
@@ -210,7 +195,7 @@ static void dp_display_notify_hdcp_status_cb(void *ptr,
 		return;
 	}
 
-	dp->hdcp_status = status;
+	dp->link->hdcp_status.hdcp_state = state;
 
 	if (dp->dp_display.is_connected)
 		queue_delayed_work(dp->wq, &dp->hdcp_cb_work, HZ/4);
@@ -226,11 +211,15 @@ static void dp_display_update_hdcp_info(struct dp_display_private *dp)
 {
 	void *fd = NULL;
 	struct sde_hdcp_ops *ops = NULL;
+	bool hdcp2_present = false, hdcp1_present = false;
 
 	if (!dp) {
 		pr_err("invalid input\n");
 		return;
 	}
+
+	dp->link->hdcp_status.hdcp_state = HDCP_STATE_INACTIVE;
+	dp->link->hdcp_status.hdcp_version = HDCP_VERSION_NONE;
 
 	if (!dp->hdcp.feature_enabled) {
 		pr_debug("feature not enabled\n");
@@ -242,26 +231,29 @@ static void dp_display_update_hdcp_info(struct dp_display_private *dp)
 		ops = sde_dp_hdcp2p2_start(fd);
 
 	if (ops && ops->feature_supported)
-		dp->hdcp.hdcp2_present = ops->feature_supported(fd);
+		hdcp2_present = ops->feature_supported(fd);
 	else
-		dp->hdcp.hdcp2_present = false;
+		hdcp2_present = false;
 
 	pr_debug("hdcp2p2: %s\n",
-			dp->hdcp.hdcp2_present ? "supported" : "not supported");
+			hdcp2_present ? "supported" : "not supported");
 
-	if (!dp->hdcp.hdcp2_present) {
-		dp->hdcp.hdcp1_present = hdcp1_check_if_supported_load_app();
+	if (!hdcp2_present) {
+		hdcp1_present = hdcp1_check_if_supported_load_app();
 
-		if (dp->hdcp.hdcp1_present) {
+		if (hdcp1_present) {
 			fd = dp->hdcp.hdcp1;
 			ops = sde_hdcp_1x_start(fd);
+			dp->link->hdcp_status.hdcp_version = HDCP_VERSION_1X;
 		}
+	} else {
+		dp->link->hdcp_status.hdcp_version = HDCP_VERSION_2P2;
 	}
 
 	pr_debug("hdcp1x: %s\n",
-			dp->hdcp.hdcp1_present ? "supported" : "not supported");
+			hdcp1_present ? "supported" : "not supported");
 
-	if (dp->hdcp.hdcp2_present || dp->hdcp.hdcp1_present) {
+	if (hdcp2_present || hdcp1_present) {
 		dp->hdcp.data = fd;
 		dp->hdcp.ops = ops;
 	} else {
@@ -302,7 +294,6 @@ static int dp_display_initialize_hdcp(struct dp_display_private *dp)
 	hdcp_init_data.drm_aux       = dp->aux->drm_aux;
 	hdcp_init_data.cb_data       = (void *)dp;
 	hdcp_init_data.workq         = dp->wq;
-	hdcp_init_data.mutex         = &dp->hdcp_mutex;
 	hdcp_init_data.sec_access    = true;
 	hdcp_init_data.notify_status = dp_display_notify_hdcp_status_cb;
 	hdcp_init_data.dp_ahb        = &parser->get_io(parser, "dp_ahb")->io;
@@ -314,6 +305,7 @@ static int dp_display_initialize_hdcp(struct dp_display_private *dp)
 	hdcp_init_data.hdcp_io       = &parser->get_io(parser,
 						"hdcp_physical")->io;
 	hdcp_init_data.revision      = &dp->panel->link_info.revision;
+	hdcp_init_data.msm_hdcp_dev  = dp->parser->msm_hdcp_dev;
 
 	dp->hdcp.hdcp1 = sde_hdcp_1x_init(&hdcp_init_data);
 	if (IS_ERR_OR_NULL(dp->hdcp.hdcp1)) {
@@ -653,7 +645,7 @@ end:
 static void dp_display_clean(struct dp_display_private *dp)
 {
 	if (dp_display_is_hdcp_enabled(dp)) {
-		dp->hdcp_status = HDCP_STATE_INACTIVE;
+		dp->link->hdcp_status.hdcp_state = HDCP_STATE_INACTIVE;
 
 		cancel_delayed_work_sync(&dp->hdcp_cb_work);
 		if (dp->hdcp.ops->off)
@@ -738,7 +730,7 @@ static int dp_display_usbpd_disconnect_cb(struct device *dev)
 end:
 	return rc;
 }
-
+#if 0
 static void dp_display_handle_maintenance_req(struct dp_display_private *dp)
 {
 	mutex_lock(&dp->audio->ops_lock);
@@ -753,7 +745,7 @@ static void dp_display_handle_maintenance_req(struct dp_display_private *dp)
 
 	mutex_unlock(&dp->audio->ops_lock);
 }
-
+#endif
 static void dp_display_attention_work(struct work_struct *work)
 {
 	struct dp_display_private *dp = container_of(work,
@@ -792,13 +784,13 @@ static void dp_display_attention_work(struct work_struct *work)
 	}
 
 	if (dp->link->sink_request & DP_LINK_STATUS_UPDATED) {
-		dp_display_handle_maintenance_req(dp);
+		 dp->ctrl->link_maintenance(dp->ctrl);
 		return;
 	}
 
 	if (dp->link->sink_request & DP_TEST_LINK_TRAINING) {
 		dp->link->send_test_response(dp->link);
-		dp_display_handle_maintenance_req(dp);
+		 dp->ctrl->link_maintenance(dp->ctrl);
 		return;
 	}
 }
@@ -932,7 +924,19 @@ static int dp_init_sub_modules(struct dp_display_private *dp)
 		goto error_aux;
 	}
 
-	dp->aux = dp_aux_get(dev, &dp->catalog->aux, dp->parser->aux_cfg);
+	cb->configure  = dp_display_usbpd_configure_cb;
+	cb->disconnect = dp_display_usbpd_disconnect_cb;
+	cb->attention  = dp_display_usbpd_attention_cb;
+
+	dp->usbpd = dp_usbpd_get(dev, cb);
+	if (IS_ERR(dp->usbpd)) {
+		rc = PTR_ERR(dp->usbpd);
+		pr_err("failed to initialize usbpd, rc = %d\n", rc);
+		dp->usbpd = NULL;
+		goto error_usbpd;
+	}
+
+	dp->aux = dp_aux_get(dev, &dp->catalog->aux, dp->parser->aux_cfg, dp->usbpd);
 	if (IS_ERR(dp->aux)) {
 		rc = PTR_ERR(dp->aux);
 		pr_err("failed to initialize aux, rc = %d\n", rc);
@@ -989,18 +993,6 @@ static int dp_init_sub_modules(struct dp_display_private *dp)
 		goto error_audio;
 	}
 
-	cb->configure  = dp_display_usbpd_configure_cb;
-	cb->disconnect = dp_display_usbpd_disconnect_cb;
-	cb->attention  = dp_display_usbpd_attention_cb;
-
-	dp->usbpd = dp_usbpd_get(dev, cb);
-	if (IS_ERR(dp->usbpd)) {
-		rc = PTR_ERR(dp->usbpd);
-		pr_err("failed to initialize usbpd, rc = %d\n", rc);
-		dp->usbpd = NULL;
-		goto error_usbpd;
-	}
-
 	dp->debug = dp_debug_get(dev, dp->panel, dp->usbpd,
 				dp->link, dp->aux, &dp->dp_display.connector,
 				dp->catalog);
@@ -1013,8 +1005,6 @@ static int dp_init_sub_modules(struct dp_display_private *dp)
 
 	return rc;
 error_debug:
-	dp_usbpd_put(dp->usbpd);
-error_usbpd:
 	dp_audio_put(dp->audio);
 error_audio:
 	dp_ctrl_put(dp->ctrl);
@@ -1025,6 +1015,8 @@ error_panel:
 error_link:
 	dp_aux_put(dp->aux);
 error_aux:
+	dp_usbpd_put(dp->usbpd);
+error_usbpd:
 	dp_power_put(dp->power);
 error_power:
 	dp_catalog_put(dp->catalog);
@@ -1161,7 +1153,6 @@ static int dp_display_post_enable(struct dp_display *dp_display)
 		pr_err("aborted\n");
 		goto end;
 	}
-
 	dp->panel->spd_config(dp->panel);
 
 	if (dp->audio_supported) {
@@ -1175,13 +1166,8 @@ static int dp_display_post_enable(struct dp_display *dp_display)
 	if (dp_display_is_hdcp_enabled(dp)) {
 		cancel_delayed_work_sync(&dp->hdcp_cb_work);
 
-		dp->hdcp_status = HDCP_STATE_AUTHENTICATING;
-#ifndef CONFIG_LGE_DISPLAY_COMMON
-		queue_delayed_work(dp->wq, &dp->hdcp_cb_work, HZ / 2);
-#else
+		dp->link->hdcp_status.hdcp_state = HDCP_STATE_AUTHENTICATING;
 		queue_delayed_work(dp->wq, &dp->hdcp_cb_work, HZ * 3);
-		pr_info("authentication 3s\n");
-#endif
 	}
 
 	dp->panel->setup_hdr(dp->panel, NULL);
@@ -1214,7 +1200,7 @@ static int dp_display_pre_disable(struct dp_display *dp_display)
 	}
 
 	if (dp_display_is_hdcp_enabled(dp)) {
-		dp->hdcp_status = HDCP_STATE_INACTIVE;
+		dp->link->hdcp_status.hdcp_state = HDCP_STATE_INACTIVE;
 
 		cancel_delayed_work_sync(&dp->hdcp_cb_work);
 		if (dp->hdcp.ops->off)
@@ -1501,6 +1487,9 @@ int dp_display_get_displays(void **displays, int count)
 
 int dp_display_get_num_of_displays(void)
 {
+	if (!g_dp_display)
+		return 0;
+
 	return 1;
 }
 
@@ -1527,6 +1516,7 @@ static struct platform_driver dp_display_driver = {
 	.driver = {
 		.name = "msm-dp-display",
 		.of_match_table = dp_dt_match,
+		.suppress_bind_attrs = true,
 	},
 };
 

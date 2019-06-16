@@ -1,8 +1,5 @@
 /*
- * Copyright (c) 2012-2017 The Linux Foundation. All rights reserved.
- *
- * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
- *
+ * Copyright (c) 2012-2018 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -17,12 +14,6 @@
  * PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
  * TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
  * PERFORMANCE OF THIS SOFTWARE.
- */
-
-/*
- * This file was originally distributed by Qualcomm Atheros, Inc.
- * under proprietary terms before Copyright ownership was assigned
- * to the Linux Foundation.
  */
 
 /*
@@ -399,21 +390,21 @@ int __pktlog_enable(struct hif_opaque_softc *scn, int32_t log_state,
 	int error;
 
 	if (!scn) {
-		printk("%s: Invalid scn context\n", __func__);
+		qdf_print("%s: Invalid scn context\n", __func__);
 		ASSERT(0);
 		return -1;
 	}
 
 	txrx_pdev = cds_get_context(QDF_MODULE_ID_TXRX);
 	if (!txrx_pdev) {
-		printk("%s: Invalid txrx_pdev context\n", __func__);
+		qdf_print("%s: Invalid txrx_pdev context\n", __func__);
 		ASSERT(0);
 		return -1;
 	}
 
 	pl_dev = txrx_pdev->pl_dev;
 	if (!pl_dev) {
-		printk("%s: Invalid pktlog context\n", __func__);
+		qdf_print("%s: Invalid pktlog context\n", __func__);
 		ASSERT(0);
 		return -1;
 	}
@@ -451,8 +442,8 @@ int __pktlog_enable(struct hif_opaque_softc *scn, int32_t log_state,
 			if (!pl_info->buf) {
 				pl_info->curr_pkt_state =
 					PKTLOG_OPR_NOT_IN_PROGRESS;
-				printk("%s: pktlog buf alloc failed\n",
-				       __func__);
+				qdf_print("%s: pktlog buf alloc failed\n",
+					  __func__);
 				ASSERT(0);
 				return -1;
 			}
@@ -478,20 +469,31 @@ int __pktlog_enable(struct hif_opaque_softc *scn, int32_t log_state,
 
 	if (log_state != 0) {
 		/* WDI subscribe */
-		if ((!pl_dev->is_pktlog_cb_subscribed) &&
-			wdi_pktlog_subscribe(txrx_pdev, log_state)) {
-			pl_info->curr_pkt_state = PKTLOG_OPR_NOT_IN_PROGRESS;
-			printk("Unable to subscribe to the WDI %s\n", __func__);
-			return -1;
+		if (!pl_dev->is_pktlog_cb_subscribed) {
+			error = wdi_pktlog_subscribe(txrx_pdev, log_state);
+			if (error) {
+				pl_info->curr_pkt_state =
+					PKTLOG_OPR_NOT_IN_PROGRESS;
+				qdf_print("Unable to subscribe to the WDI %s\n",
+					  __func__);
+				return -EINVAL;
+			}
+		} else {
+			pl_info->curr_pkt_state =
+				PKTLOG_OPR_NOT_IN_PROGRESS;
+			qdf_print("Already subscribed %s\n",
+				  __func__);
+			return -EINVAL;
 		}
-		pl_dev->is_pktlog_cb_subscribed = true;
+
 		/* WMI command to enable pktlog on the firmware */
 		if (pktlog_enable_tgt(scn, log_state, ini_triggered,
 				user_triggered)) {
 			pl_info->curr_pkt_state = PKTLOG_OPR_NOT_IN_PROGRESS;
-			printk("Device cannot be enabled, %s\n", __func__);
+			qdf_print("Device cannot be enabled, %s\n", __func__);
 			return -1;
 		}
+		pl_dev->is_pktlog_cb_subscribed = true;
 
 		if (is_iwpriv_command == 0)
 			pl_dev->vendor_cmd_send = true;
@@ -710,18 +712,21 @@ int pktlog_clearbuff(struct hif_opaque_softc *scn, bool clear_buff)
  *
  * Return: None
  */
-void pktlog_process_fw_msg(uint32_t *buff)
+void pktlog_process_fw_msg(uint32_t *buff, uint32_t len)
 {
 	uint32_t *pl_hdr;
 	uint32_t log_type;
 	struct ol_txrx_pdev_t *txrx_pdev = cds_get_context(QDF_MODULE_ID_TXRX);
+	struct ol_fw_data pl_fw_data;
 
 	if (!txrx_pdev) {
 		qdf_print("%s: txrx_pdev is NULL", __func__);
 		return;
 	}
-
 	pl_hdr = buff;
+	pl_fw_data.data = pl_hdr;
+	pl_fw_data.len = len;
+
 	log_type =
 		(*(pl_hdr + 1) & ATH_PKTLOG_HDR_LOG_TYPE_MASK) >>
 		ATH_PKTLOG_HDR_LOG_TYPE_SHIFT;
@@ -731,19 +736,19 @@ void pktlog_process_fw_msg(uint32_t *buff)
 		|| (log_type == PKTLOG_TYPE_TX_FRM_HDR)
 		|| (log_type == PKTLOG_TYPE_TX_VIRT_ADDR))
 		wdi_event_handler(WDI_EVENT_TX_STATUS,
-				  txrx_pdev, pl_hdr);
+				  txrx_pdev, &pl_fw_data);
 	else if (log_type == PKTLOG_TYPE_RC_FIND)
 		wdi_event_handler(WDI_EVENT_RATE_FIND,
-				  txrx_pdev, pl_hdr);
+				  txrx_pdev, &pl_fw_data);
 	else if (log_type == PKTLOG_TYPE_RC_UPDATE)
 		wdi_event_handler(WDI_EVENT_RATE_UPDATE,
-				  txrx_pdev, pl_hdr);
+				  txrx_pdev, &pl_fw_data);
 	else if (log_type == PKTLOG_TYPE_RX_STAT)
 		wdi_event_handler(WDI_EVENT_RX_DESC,
-				  txrx_pdev, pl_hdr);
+				  txrx_pdev, &pl_fw_data);
 	else if (log_type == PKTLOG_TYPE_SW_EVENT)
 		wdi_event_handler(WDI_EVENT_SW_EVENT,
-				  txrx_pdev, pl_hdr);
+				  txrx_pdev, &pl_fw_data);
 
 }
 
@@ -771,6 +776,7 @@ static void pktlog_t2h_msg_handler(void *context, HTC_PACKET *pkt)
 	struct ol_pktlog_dev_t *pdev = (struct ol_pktlog_dev_t *)context;
 	qdf_nbuf_t pktlog_t2h_msg = (qdf_nbuf_t) pkt->pPktContext;
 	uint32_t *msg_word;
+	uint32_t msg_len;
 
 	/* check for sanity of the packet, have seen corrupted pkts */
 	if (pktlog_nbuf_check_sanity(pktlog_t2h_msg)) {
@@ -793,7 +799,8 @@ static void pktlog_t2h_msg_handler(void *context, HTC_PACKET *pkt)
 	qdf_assert((((unsigned long)qdf_nbuf_data(pktlog_t2h_msg)) & 0x3) == 0);
 
 	msg_word = (uint32_t *) qdf_nbuf_data(pktlog_t2h_msg);
-	pktlog_process_fw_msg(msg_word);
+	msg_len = qdf_nbuf_len(pktlog_t2h_msg);
+	pktlog_process_fw_msg(msg_word, msg_len);
 
 	qdf_nbuf_free(pktlog_t2h_msg);
 }

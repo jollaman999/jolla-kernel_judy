@@ -4,7 +4,7 @@ qcom,LGE_BLT39_LGC_3000mAh {
 	/* fg feature for battery charactistics */
 	/* constant parameter */
 	lge,fg-cutoff-voltage = <3200>;
-	lge,fg-sys-standby-current = <200>;
+	lge,fg-cutoff-current = <200>;
 	lge,fg-esr-tight-lt-filter-micro-pct = <30000>;
 	lge,fg-esr-broad-lt-filter-micro-pct = <30000>;
 

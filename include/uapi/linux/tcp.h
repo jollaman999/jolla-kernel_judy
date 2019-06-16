@@ -135,6 +135,7 @@ enum {
 
 #define MPTCP_INFO_FLAG_SAVE_MASTER	0x01
 #endif
+#define TCP_FASTOPEN_CONNECT	30	/* Attempt FastOpen with connect */
 
 struct tcp_repair_opt {
 	__u32	opt_code;

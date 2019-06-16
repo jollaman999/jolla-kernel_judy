@@ -136,6 +136,7 @@ struct cam_cmd_ois_info {
 	struct cam_ois_opcode opcode;
 } __attribute__((packed));
 
+/* LGE_CHANGE_S, 2018-09-11, OIS,AF Driver update for LG EIS, yonghwan.lym@lge.com */
 /**
  * struct cam_cmd_ois_userdata - Contains OIS userdata
  *
@@ -161,7 +162,7 @@ struct cam_cmd_actuator_userdata {
 	uint8_t               actuatorThreadNeeded;
 	uint32_t              reserved;
 } __attribute__((packed));
-
+/* LGE_CHANGE_E, 2018-09-11, OIS,AF Driver update for LG EIS, yonghwan.lym@lge.com */
 
 /**
  * struct cam_cmd_probe - Contains sensor slave info

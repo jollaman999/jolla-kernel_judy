@@ -38,10 +38,14 @@ struct fusb252 {
 
 	/* GPIOs */
 	struct gpio_desc		*oe_desc;
-	struct gpio_desc		*sel_desc;
-	struct gpio_desc		*ccov_desc;
 	int				oe;
+
+	struct gpio_desc		*sel_desc;
 	int				sel;
+
+	struct gpio_desc		*ovp_desc;
+	int				ovp_irq;
+	int				ovp;
 
 	/* Flags */
 	atomic_t			flags[FUSB252_MODE_MAX];
@@ -171,30 +175,6 @@ static unsigned long update_state(struct fusb252 *fusb252)
 	return BIT(i);
 }
 
-static irqreturn_t fusb252_ccov_detected(int irq, void* data) {
-	struct fusb252*	fusb252 = (struct fusb252*)data;
-	bool triggered = (fusb252 && fusb252->ccov_desc)
-		? !gpiod_get_value(fusb252->ccov_desc) : false;
-
-	pr_info("Overvolatge on CC detected (%s)\n", triggered ? "true" : "false");
-
-	if (triggered) {
-		// CC-ov interrupt is bound to the falling edge of SDM-GPIO-79
-#ifdef CONFIG_LGE_PM_VENEER_PSY
-		struct power_supply* veneer = power_supply_get_by_name("veneer");
-		if (veneer) {
-			union power_supply_propval
-				vccover = { .intval = EXCEPTION_WIRED_VCCOVER, };
-			power_supply_set_property(veneer,
-				POWER_SUPPLY_PROP_CHARGE_NOW_ERROR, &vccover);
-			power_supply_put(veneer);
-		}
-#endif
-	}
-
-	return IRQ_HANDLED;
-}
-
 int fusb252_get(struct fusb252_instance *inst, unsigned long flag)
 {
 	struct fusb252 *fusb252 = __fusb252;
@@ -265,6 +245,61 @@ unsigned long fusb252_get_current_flag(struct fusb252_instance *inst)
 	return cur_flag;
 }
 EXPORT_SYMBOL(fusb252_get_current_flag);
+
+static irqreturn_t fusb252_ovp_irq_thread(int irq, void *data)
+{
+	struct fusb252 *fusb252 = (struct fusb252 *)data;
+	int ovp;
+	struct list_head *pos;
+	struct list_head *tmp;
+
+	ovp = !gpiod_get_value(fusb252->ovp_desc);
+	dev_dbg(fusb252->dev, "ovp old(%d), new(%d)\n", fusb252->ovp, ovp);
+
+	if (ovp == fusb252->ovp)
+		return IRQ_HANDLED;
+
+	dev_info(fusb252->dev, "ovp (%d)\n", ovp);
+	fusb252->ovp = ovp;
+
+#ifdef CONFIG_LGE_PM_VENEER_PSY
+	if (ovp) {
+		// CC-ov interrupt is bound to the falling edge of SDM-GPIO-79
+		struct power_supply* veneer = power_supply_get_by_name("veneer");
+
+		pr_info("Overvolatge on CC detected (true)\n");
+
+		if (veneer) {
+			union power_supply_propval
+				vccover = { .intval = EXCEPTION_WIRED_VCCOVER, };
+			power_supply_set_property(veneer,
+				POWER_SUPPLY_PROP_CHARGE_NOW_ERROR, &vccover);
+			power_supply_put(veneer);
+		}
+	}
+#endif
+
+	list_for_each_safe(pos, tmp, &fusb252->inst_list) {
+		struct fusb252_instance *inst = container_of(pos,
+			struct fusb252_instance, list);
+
+		if (inst->desc->ovp_callback)
+			inst->desc->ovp_callback(inst, ovp);
+	}
+
+	return IRQ_HANDLED;
+}
+
+int fusb252_get_ovp_state(struct fusb252_instance *inst)
+{
+	struct fusb252 *fusb252 = __fusb252;
+
+	if (!fusb252 || !inst)
+		return -EINVAL;
+
+	return fusb252->ovp;
+}
+EXPORT_SYMBOL(fusb252_get_ovp_state);
 
 void devm_fusb252_instance_unregister(struct device *dev,
 				      struct fusb252_instance *inst)
@@ -354,23 +389,22 @@ static int fusb252_probe(struct platform_device *pdev)
 		return PTR_ERR(fusb252->sel_desc);
 	}
 
-	fusb252->ccov_desc = devm_gpiod_get(dev, "lge,ccov", GPIOD_IN);
-	if (IS_ERR(fusb252->ccov_desc)) {
-		dev_err(dev, "couldn't get ccov gpio_desc\n");
-		return PTR_ERR(fusb252->ccov_desc);
+	fusb252->ovp_desc = devm_gpiod_get(dev, "lge,ovp", GPIOD_IN);
+	if (IS_ERR(fusb252->ovp_desc)) {
+		dev_err(dev, "couldn't get ovp gpio_desc\n");
+		return PTR_ERR(fusb252->ovp_desc);
 	}
+	fusb252->ovp_irq = gpiod_to_irq(fusb252->ovp_desc);
 
-	ret = request_threaded_irq(gpiod_to_irq(fusb252->ccov_desc),
-		NULL, fusb252_ccov_detected,
-		IRQF_ONESHOT | IRQF_TRIGGER_FALLING,
-		"cc-ov", fusb252);
+	ret = request_threaded_irq(fusb252->ovp_irq,
+		NULL, fusb252_ovp_irq_thread,
+		IRQF_ONESHOT | IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING,
+		"fusb252-ovp", fusb252);
 	if (ret) {
-		dev_err(dev, "Cannot request irq %d (%d)\n",
-			gpiod_to_irq(fusb252->ccov_desc), ret);
+		dev_err(dev, "Cannot request ovp irq\n");
 		return ret;
 	}
-	else
-		enable_irq_wake(gpiod_to_irq(fusb252->ccov_desc));
+	enable_irq_wake(fusb252->ovp_irq);
 
 	gpio_pinctrl = devm_pinctrl_get(dev);
 	if (IS_ERR_OR_NULL(gpio_pinctrl)) {

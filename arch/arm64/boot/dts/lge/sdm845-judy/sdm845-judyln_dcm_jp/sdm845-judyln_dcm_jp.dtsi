@@ -32,4 +32,5 @@
 #include "../sdm845-camera/sdm845-judy-camera.dtsi"
 #include "sdm845-judyln_dcm_jp-usb.dtsi"
 #include "sdm845-judyln_dcm_jp-storage.dtsi"
+#include "sdm845-judyln_dcm_jp-pkm.dtsi"
 

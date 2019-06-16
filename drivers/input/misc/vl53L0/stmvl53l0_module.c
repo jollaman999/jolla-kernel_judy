@@ -834,6 +834,18 @@ int stmvl53l0_poll_thread(void *data)
 		}
 
 		mutex_lock(&vl53l0_dev->work_mutex);
+		/* LGE_CHANGE_S, Avoid LDAF data read after sensor power off 2018-12-05 sungmin.cho@lge.com */
+		if (vl53l0_dev->enable_ps_sensor == 0
+			|| pmodule_func_tbl->query_power_status() == 0)
+		{
+			pr_err("%s(%d) : enable %d power status %d\n",
+				__func__, __LINE__,
+				vl53l0_dev->enable_ps_sensor, pmodule_func_tbl->query_power_status());
+			mutex_unlock(&vl53l0_dev->work_mutex);
+			msleep(sleep_time);
+			continue;
+		}
+		/* LGE_CHANGE_E, Avoid LDAF data read after sensor power off 2018-12-05 sungmin.cho@lge.com */
 
 		sleep_time = vl53l0_dev->delay_ms;
 		Status = VL53L0_GetInterruptMaskStatus(vl53l0_dev,
@@ -2387,7 +2399,9 @@ static int stmvl53l0_init_client(struct stmvl53l0_data *data)
 {
 
 	VL53L0_Error Status = VL53L0_ERROR_NONE;
+#if 0 /* removed logs for perf */
 	VL53L0_DeviceInfo_t DeviceInfo;
+#endif
 	VL53L0_DEV vl53l0_dev = data;
 	uint32_t refSpadCount = 0;
 	uint8_t isApertureSpads = 0;
@@ -2433,6 +2447,7 @@ static int stmvl53l0_init_client(struct stmvl53l0_data *data)
 
 /* Step 1. Data Init, Static Init */
 	vl53l0_dbgmsg("stmvl53l0_init_client Step 1. Data Init, Static Init\n");
+#if 0 /* removed logs for perf */
 	vl53l0_dbgmsg("VL53L0_GetDeviceInfo:\n");
 	Status = papi_func_tbl->GetDeviceInfo(vl53l0_dev, &DeviceInfo);
 	if (Status == VL53L0_ERROR_NONE) {
@@ -2445,6 +2460,7 @@ static int stmvl53l0_init_client(struct stmvl53l0_data *data)
 		pr_err("ProductRevisionMinor : %d\n",
 				DeviceInfo.ProductRevisionMinor);
 	}
+#endif
 		/* Device Initialization */
 	vl53l0_dbgmsg("Call of VL53L0_StaticInit\n");
 	Status = papi_func_tbl->StaticInit(vl53l0_dev);

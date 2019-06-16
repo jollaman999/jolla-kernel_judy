@@ -591,7 +591,7 @@ int stmvl53l0_power_down_cci(void)
 		return -EINVAL;
 	}
 
-	rc = msm_camera_power_down(power_info, soc_info);
+	rc = cam_sensor_util_power_down(power_info, soc_info);
 	if (rc) {
 		vl53l0_dbgmsg( "power down the core is failed:%d", rc);
 		return rc;

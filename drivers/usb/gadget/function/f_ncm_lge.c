@@ -80,15 +80,11 @@ struct f_ncm {
 
 #ifdef CONFIG_LGE_USB_GADGET
 static struct delayed_work start_work;
-static int start_requested = 0;
+static int start_requested;
 
 int get_ncm_start_requested(void) {
 	return start_requested;
 }
-void clear_ncm_start_requested(void) {
-	start_requested = 0;
-}
-EXPORT_SYMBOL_GPL(clear_ncm_start_requested);
 #endif
 
 static inline struct f_ncm *func_to_ncm(struct usb_function *f)

@@ -728,13 +728,8 @@ int line6_probe(struct usb_interface *interface,
 	line6->usbdev = usbdev;
 	line6->ifcdev = &interface->dev;
 
-#ifdef CONFIG_MACH_LGE
-	strncpy(card->id, properties->id, sizeof(card->id) - 1);
-	strncpy(card->driver, driver_name, sizeof(card->driver) -1);
-#else
 	strcpy(card->id, properties->id);
 	strcpy(card->driver, driver_name);
-#endif
 	strcpy(card->shortname, properties->name);
 	sprintf(card->longname, "Line 6 %s at USB %s", properties->name,
 		dev_name(line6->ifcdev));

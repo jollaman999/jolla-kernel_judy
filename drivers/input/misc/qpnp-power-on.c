@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2017, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2018, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -31,6 +31,8 @@
 #include <linux/regulator/machine.h>
 #include <linux/regulator/of_regulator.h>
 #include <linux/input/qpnp-power-on.h>
+#include <linux/qpnp/qpnp-pbs.h>
+#include <linux/qpnp/qpnp-misc.h>
 #include <linux/power_supply.h>
 
 #ifdef CONFIG_LGE_HANDLE_PANIC
@@ -207,6 +209,7 @@ struct qpnp_pon {
 	struct list_head	list;
 	struct delayed_work	bark_work;
 	struct dentry		*debugfs;
+	struct device_node      *pbs_dev_node;
 	int			pon_trigger_reason;
 	int			pon_power_off_reason;
 	int			num_pon_reg;
@@ -216,6 +219,9 @@ struct qpnp_pon {
 	int			warm_reset_poff_type;
 	int			hard_reset_poff_type;
 	int			shutdown_poff_type;
+	int			resin_warm_reset_type;
+	int			resin_hard_reset_type;
+	int			resin_shutdown_type;
 	u16			base;
 	u8			subtype;
 	u8			pon_ver;
@@ -224,10 +230,19 @@ struct qpnp_pon {
 #ifdef CONFIG_LGE_PM
 	u8			pon_pon_off_reason;
 #endif
+	u8                      twm_state;
 	bool			is_spon;
 	bool			store_hard_reset_reason;
+	bool			resin_hard_reset_disable;
+	bool			resin_shutdown_disable;
+	bool			ps_hold_hard_reset_disable;
+	bool			ps_hold_shutdown_disable;
 	bool			kpdpwr_dbc_enable;
+	bool                    support_twm_config;
+	bool			resin_pon_reset;
 	ktime_t			kpdpwr_last_release_time;
+	struct notifier_block   pon_nb;
+	bool			legacy_hard_reset_offset;
 };
 
 static int pon_ship_mode_en;
@@ -373,7 +388,7 @@ int qpnp_pon_set_restart_reason(enum pon_restart_reason reason)
 	if (!pon->store_hard_reset_reason)
 		return 0;
 
-	if (is_pon_gen2(pon))
+	if (is_pon_gen2(pon) && !pon->legacy_hard_reset_offset)
 		rc = qpnp_pon_masked_write(pon, QPNP_PON_SOFT_RB_SPARE(pon),
 					   GENMASK(7, 1), (reason << 1));
 	else
@@ -500,13 +515,54 @@ static ssize_t qpnp_pon_dbc_store(struct device *dev,
 	return size;
 }
 
+static struct qpnp_pon_config *
+qpnp_get_cfg(struct qpnp_pon *pon, u32 pon_type)
+{
+	int i;
+
+	for (i = 0; i < pon->num_pon_config; i++) {
+		if (pon_type == pon->pon_cfg[i].pon_type)
+			return  &pon->pon_cfg[i];
+	}
+
+	return NULL;
+}
+
 static DEVICE_ATTR(debounce_us, 0664, qpnp_pon_dbc_show, qpnp_pon_dbc_store);
 
+#define PON_TWM_ENTRY_PBS_BIT           BIT(0)
 static int qpnp_pon_reset_config(struct qpnp_pon *pon,
 		enum pon_power_off_type type)
 {
 	int rc;
+	bool disable = false;
 	u16 rst_en_reg;
+	struct qpnp_pon_config *cfg;
+
+	/* Ignore the PS_HOLD reset config if TWM ENTRY is enabled */
+	if (pon->support_twm_config && pon->twm_state == PMIC_TWM_ENABLE) {
+		rc = qpnp_pbs_trigger_event(pon->pbs_dev_node,
+					PON_TWM_ENTRY_PBS_BIT);
+		if (rc < 0) {
+			pr_err("Unable to trigger PBS trigger for TWM entry rc=%d\n",
+							rc);
+			return rc;
+		}
+
+		cfg = qpnp_get_cfg(pon, PON_KPDPWR);
+		if (cfg) {
+			/* configure KPDPWR_S2 to Hard reset */
+			rc = qpnp_pon_masked_write(pon, cfg->s2_cntl_addr,
+						QPNP_PON_S2_CNTL_TYPE_MASK,
+						PON_POWER_OFF_HARD_RESET);
+			if (rc < 0)
+				pr_err("Unable to config KPDPWR_N S2 for hard-reset rc=%d\n",
+					rc);
+		}
+
+		pr_crit("PMIC configured for TWM entry\n");
+		return 0;
+	}
 
 	if (pon->pon_ver == QPNP_PON_GEN1_V1)
 		rst_en_reg = QPNP_PON_PS_HOLD_RST_CTL(pon);
@@ -525,10 +581,12 @@ static int qpnp_pon_reset_config(struct qpnp_pon *pon,
 	case PON_POWER_OFF_HARD_RESET:
 		if (pon->hard_reset_poff_type != -EINVAL)
 			type = pon->hard_reset_poff_type;
+		disable = pon->ps_hold_hard_reset_disable;
 		break;
 	case PON_POWER_OFF_SHUTDOWN:
 		if (pon->shutdown_poff_type != -EINVAL)
 			type = pon->shutdown_poff_type;
+		disable = pon->ps_hold_shutdown_disable;
 		break;
 	default:
 		break;
@@ -539,6 +597,13 @@ static int qpnp_pon_reset_config(struct qpnp_pon *pon,
 		dev_err(&pon->pdev->dev,
 			"Unable to write to addr=%hx, rc(%d)\n",
 			rst_en_reg, rc);
+
+	/*
+	 * Check if ps-hold power off configuration needs to be disabled.
+	 * If yes, then return without configuring.
+	 */
+	if (disable)
+		return rc;
 
 	/*
 	 * We need 10 sleep clock cycles here. But since the clock is
@@ -562,11 +627,84 @@ static int qpnp_pon_reset_config(struct qpnp_pon *pon,
 			rst_en_reg, rc);
 
 #ifdef CONFIG_LGE_HANDLE_PANIC
-	dev_info(&pon->pdev->dev, "power off type = 0x%02X, %s\n",
+	dev_info(&pon->pdev->dev, "ps_hold power off type = 0x%02X, %s\n",
 							type, pon_ps_hold_reset_ctl[type]);
 #else
 	dev_dbg(&pon->pdev->dev, "power off type = 0x%02X\n", type);
 #endif
+	return rc;
+}
+
+static int qpnp_resin_pon_reset_config(struct qpnp_pon *pon,
+		enum pon_power_off_type type)
+{
+	int rc;
+	bool disable = false;
+	u16 rst_en_reg;
+
+	if (pon->pon_ver == QPNP_PON_GEN1_V1)
+		rst_en_reg = QPNP_PON_RESIN_S2_CNTL(pon);
+	else
+		rst_en_reg = QPNP_PON_RESIN_S2_CNTL2(pon);
+
+	/*
+	 * Based on the poweroff type set for a PON device through device tree
+	 * change the type being configured into PON_RESIN_S2_CTL.
+	 */
+	switch (type) {
+	case PON_POWER_OFF_WARM_RESET:
+		if (pon->resin_warm_reset_type != -EINVAL)
+			type = pon->resin_warm_reset_type;
+		break;
+	case PON_POWER_OFF_HARD_RESET:
+		if (pon->resin_hard_reset_type != -EINVAL)
+			type = pon->resin_hard_reset_type;
+		disable = pon->resin_hard_reset_disable;
+		break;
+	case PON_POWER_OFF_SHUTDOWN:
+		if (pon->resin_shutdown_type != -EINVAL)
+			type = pon->resin_shutdown_type;
+		disable = pon->resin_shutdown_disable;
+		break;
+	default:
+		break;
+	}
+
+	rc = qpnp_pon_masked_write(pon, rst_en_reg, QPNP_PON_S2_CNTL_EN, 0);
+	if (rc)
+		dev_err(&pon->pdev->dev,
+			"Unable to write to addr=%hx, rc(%d)\n",
+			rst_en_reg, rc);
+
+	/*
+	 * Check if resin power off configuration needs to be disabled.
+	 * If yes, then return without configuring.
+	 */
+	if (disable)
+		return rc;
+
+	/*
+	 * We need 10 sleep clock cycles here. But since the clock is
+	 * internally generated, we need to add 50% tolerance to be
+	 * conservative.
+	 */
+	udelay(500);
+
+	rc = qpnp_pon_masked_write(pon, QPNP_PON_RESIN_S2_CNTL(pon),
+				   QPNP_PON_S2_CNTL_TYPE_MASK, type);
+	if (rc)
+		dev_err(&pon->pdev->dev,
+			"Unable to write to addr=%x, rc(%d)\n",
+				QPNP_PON_RESIN_S2_CNTL(pon), rc);
+
+	rc = qpnp_pon_masked_write(pon, rst_en_reg, QPNP_PON_S2_CNTL_EN,
+						    QPNP_PON_S2_CNTL_EN);
+	if (rc)
+		dev_err(&pon->pdev->dev,
+			"Unable to write to addr=%hx, rc(%d)\n",
+			rst_en_reg, rc);
+
+	dev_dbg(&pon->pdev->dev, "resin power off type = 0x%02X\n", type);
 	return rc;
 }
 
@@ -620,6 +758,15 @@ int qpnp_pon_system_pwr_off(enum pon_power_off_type type)
 				"Error configuring secondary PON rc: %d\n",
 				rc);
 			goto out;
+		}
+		if (pon->resin_pon_reset) {
+			rc = qpnp_resin_pon_reset_config(pon, type);
+			if (rc) {
+				dev_err(&pon->pdev->dev,
+					"Error configuring secondary PON resin rc: %d\n",
+					rc);
+				goto out;
+			}
 		}
 	}
 	/* Set ship mode here if it has been requested */
@@ -925,19 +1072,6 @@ static int qpnp_pon_store_and_clear_warm_reset(struct qpnp_pon *pon)
 	}
 
 	return 0;
-}
-
-static struct qpnp_pon_config *
-qpnp_get_cfg(struct qpnp_pon *pon, u32 pon_type)
-{
-	int i;
-
-	for (i = 0; i < pon->num_pon_config; i++) {
-		if (pon_type == pon->pon_cfg[i].pon_type)
-			return  &pon->pon_cfg[i];
-	}
-
-	return NULL;
 }
 
 static int
@@ -2142,6 +2276,35 @@ static int read_gen2_pon_off_reason(struct qpnp_pon *pon, u16 *reason,
 	return 0;
 }
 
+static int pon_twm_notifier_cb(struct notifier_block *nb,
+				unsigned long action, void *data)
+{
+	struct qpnp_pon *pon = container_of(nb, struct qpnp_pon, pon_nb);
+
+	if (action != PMIC_TWM_CLEAR &&
+			action != PMIC_TWM_ENABLE) {
+		pr_debug("Unsupported option %lu\n", action);
+		return NOTIFY_OK;
+	}
+
+	pon->twm_state = (u8)action;
+	pr_debug("TWM state = %d\n", pon->twm_state);
+
+	return NOTIFY_OK;
+}
+
+static int pon_register_twm_notifier(struct qpnp_pon *pon)
+{
+	int rc;
+
+	pon->pon_nb.notifier_call = pon_twm_notifier_cb;
+	rc = qpnp_misc_twm_notifier_register(&pon->pon_nb);
+	if (rc < 0)
+		pr_err("Failed to register pon_twm_notifier_cb rc=%d\n", rc);
+
+	return rc;
+}
+
 static int qpnp_pon_probe(struct platform_device *pdev)
 {
 	struct qpnp_pon *pon;
@@ -2185,7 +2348,7 @@ static int qpnp_pon_probe(struct platform_device *pdev)
 		dev_err(&pdev->dev,
 			"Couldn't find reg in node = %s rc = %d\n",
 			pdev->dev.of_node->full_name, rc);
-		return rc;
+		goto err_out;
 	}
 	pon->base = base;
 
@@ -2197,7 +2360,8 @@ static int qpnp_pon_probe(struct platform_device *pdev)
 			pon->num_pon_config++;
 		} else {
 			pr_err("Unknown sub-node\n");
-			return -EINVAL;
+			rc = -EINVAL;
+			goto err_out;
 		}
 	}
 
@@ -2209,7 +2373,7 @@ static int qpnp_pon_probe(struct platform_device *pdev)
 	if (rc) {
 		dev_err(&pdev->dev, "Error in pon_regulator_init rc: %d\n",
 			rc);
-		return rc;
+		goto err_out;
 	}
 
 	if (!pon->num_pon_config)
@@ -2228,7 +2392,7 @@ static int qpnp_pon_probe(struct platform_device *pdev)
 		dev_err(&pon->pdev->dev,
 			"Unable to read PON_PERPH_SUBTYPE register rc: %d\n",
 			rc);
-		return rc;
+		goto err_out;
 	}
 	pon->subtype = temp;
 
@@ -2239,7 +2403,7 @@ static int qpnp_pon_probe(struct platform_device *pdev)
 		dev_err(&pon->pdev->dev,
 			"Unable to read addr=%x, rc(%d)\n",
 			QPNP_PON_REVISION2(pon), rc);
-		return rc;
+		goto err_out;
 	}
 
 	pon->pon_ver = temp;
@@ -2256,7 +2420,7 @@ static int qpnp_pon_probe(struct platform_device *pdev)
 		dev_err(&pon->pdev->dev,
 			"Invalid PON_PERPH_SUBTYPE value %x\n",
 			pon->subtype);
-		return -EINVAL;
+		goto err_out;
 	}
 
 	pr_debug("%s: pon_subtype=%x, pon_version=%x\n", __func__,
@@ -2267,7 +2431,7 @@ static int qpnp_pon_probe(struct platform_device *pdev)
 		dev_err(&pon->pdev->dev,
 			"Unable to store/clear WARM_RESET_REASONx registers rc: %d\n",
 			rc);
-		return rc;
+		goto err_out;
 	}
 
 	/* PON reason */
@@ -2276,7 +2440,7 @@ static int qpnp_pon_probe(struct platform_device *pdev)
 		dev_err(&pon->pdev->dev,
 			"Unable to read PON_RESASON1 reg rc: %d\n",
 			rc);
-		return rc;
+		goto err_out;
 	}
 
 	if (sys_reset)
@@ -2303,14 +2467,14 @@ static int qpnp_pon_probe(struct platform_device *pdev)
 		rc = read_gen2_pon_off_reason(pon, &poff_sts,
 						&reason_index_offset);
 		if (rc)
-			return rc;
+			goto err_out;
 	} else {
 		rc = regmap_bulk_read(pon->regmap, QPNP_POFF_REASON1(pon),
 			buf, 2);
 		if (rc) {
 			dev_err(&pon->pdev->dev, "Unable to read POFF_REASON regs rc:%d\n",
 				rc);
-			return rc;
+			goto err_out;
 		}
 		poff_sts = buf[0] | (buf[1] << 8);
 	}
@@ -2346,7 +2510,7 @@ static int qpnp_pon_probe(struct platform_device *pdev)
 			dev_err(&pon->pdev->dev,
 				"Unable to read s3 timer rc:%d\n",
 				rc);
-			return rc;
+			goto err_out;
 		}
 	} else {
 		if (s3_debounce > QPNP_PON_S3_TIMER_SECS_MAX) {
@@ -2365,7 +2529,7 @@ static int qpnp_pon_probe(struct platform_device *pdev)
 		if (rc) {
 			dev_err(&pdev->dev, "Unable to do SEC_ACCESS rc:%d\n",
 				rc);
-			return rc;
+			goto err_out;
 		}
 
 		rc = qpnp_pon_masked_write(pon, QPNP_PON_S3_DBC_CTL(pon),
@@ -2374,7 +2538,7 @@ static int qpnp_pon_probe(struct platform_device *pdev)
 			dev_err(&pdev->dev,
 				"Unable to set S3 debounce rc:%d\n",
 				rc);
-			return rc;
+			goto err_out;
 		}
 	}
 
@@ -2385,7 +2549,7 @@ static int qpnp_pon_probe(struct platform_device *pdev)
 	if (rc && rc != -EINVAL) {
 		dev_err(&pon->pdev->dev, "Unable to read s3 timer rc: %d\n",
 			rc);
-		return rc;
+		goto err_out;
 	}
 
 	if (!strcmp(s3_src, "kpdpwr"))
@@ -2407,7 +2571,7 @@ static int qpnp_pon_probe(struct platform_device *pdev)
 	if (rc) {
 		dev_err(&pdev->dev, "Unable to program s3 source rc: %d\n",
 			rc);
-		return rc;
+		goto err_out;
 	}
 
 	dev_set_drvdata(&pdev->dev, pon);
@@ -2419,7 +2583,23 @@ static int qpnp_pon_probe(struct platform_device *pdev)
 	if (rc) {
 		dev_err(&pdev->dev,
 			"Unable to initialize PON configurations rc: %d\n", rc);
-		return rc;
+		goto err_out;
+	}
+
+	if (of_property_read_bool(pon->pdev->dev.of_node,
+					"qcom,support-twm-config")) {
+		pon->support_twm_config = true;
+		rc = pon_register_twm_notifier(pon);
+		if (rc < 0) {
+			pr_err("Failed to register TWM notifier rc=%d\n", rc);
+			return rc;
+		}
+		pon->pbs_dev_node = of_parse_phandle(pon->pdev->dev.of_node,
+						"qcom,pbs-client", 0);
+		if (!pon->pbs_dev_node) {
+			pr_err("Missing qcom,pbs-client property\n");
+			return -EINVAL;
+		}
 	}
 
 	rc = of_property_read_u32(pon->pdev->dev.of_node,
@@ -2428,21 +2608,21 @@ static int qpnp_pon_probe(struct platform_device *pdev)
 		if (rc != -EINVAL) {
 			dev_err(&pdev->dev,
 				"Unable to read debounce delay rc: %d\n", rc);
-			return rc;
+			goto err_out;
 		}
 	} else {
 		rc = qpnp_pon_set_dbc(pon, delay);
 		if (rc) {
 			dev_err(&pdev->dev,
 				"Unable to set PON debounce delay rc=%d\n", rc);
-			return rc;
+			goto err_out;
 		}
 	}
 	rc = qpnp_pon_get_dbc(pon, &pon->dbc_time_us);
 	if (rc) {
 		dev_err(&pdev->dev,
 			"Unable to get PON debounce delay rc=%d\n", rc);
-		return rc;
+		goto err_out;
 	}
 
 	pon->kpdpwr_dbc_enable = of_property_read_bool(pon->pdev->dev.of_node,
@@ -2455,7 +2635,7 @@ static int qpnp_pon_probe(struct platform_device *pdev)
 		if (rc != -EINVAL) {
 			dev_err(&pdev->dev, "Unable to read warm reset poweroff type rc: %d\n",
 				rc);
-			return rc;
+			goto err_out;
 		}
 		pon->warm_reset_poff_type = -EINVAL;
 	} else if (pon->warm_reset_poff_type <= PON_POWER_OFF_RESERVED ||
@@ -2471,7 +2651,7 @@ static int qpnp_pon_probe(struct platform_device *pdev)
 		if (rc != -EINVAL) {
 			dev_err(&pdev->dev, "Unable to read hard reset poweroff type rc: %d\n",
 				rc);
-			return rc;
+			goto err_out;
 		}
 		pon->hard_reset_poff_type = -EINVAL;
 	} else if (pon->hard_reset_poff_type <= PON_POWER_OFF_RESERVED ||
@@ -2487,7 +2667,7 @@ static int qpnp_pon_probe(struct platform_device *pdev)
 		if (rc != -EINVAL) {
 			dev_err(&pdev->dev, "Unable to read shutdown poweroff type rc: %d\n",
 				rc);
-			return rc;
+			goto err_out;
 		}
 		pon->shutdown_poff_type = -EINVAL;
 	} else if (pon->shutdown_poff_type <= PON_POWER_OFF_RESERVED ||
@@ -2496,10 +2676,73 @@ static int qpnp_pon_probe(struct platform_device *pdev)
 		pon->shutdown_poff_type = -EINVAL;
 	}
 
+	pon->ps_hold_hard_reset_disable =
+					of_property_read_bool(pdev->dev.of_node,
+					"qcom,ps-hold-hard-reset-disable");
+	pon->ps_hold_shutdown_disable = of_property_read_bool(pdev->dev.of_node,
+					"qcom,ps-hold-shutdown-disable");
+
+
+	pon->resin_pon_reset = of_property_read_bool(pdev->dev.of_node,
+					"qcom,resin-pon-reset");
+
+	rc = of_property_read_u32(pon->pdev->dev.of_node,
+				"qcom,resin-warm-reset-type",
+				&pon->resin_warm_reset_type);
+	if (rc) {
+		if (rc != -EINVAL) {
+			dev_err(&pdev->dev, "Unable to read resin warm reset poweroff type rc: %d\n",
+				rc);
+			goto err_out;
+		}
+		pon->resin_warm_reset_type = -EINVAL;
+	} else if (pon->resin_warm_reset_type <= PON_POWER_OFF_RESERVED ||
+			pon->resin_warm_reset_type >= PON_POWER_OFF_MAX_TYPE) {
+		dev_err(&pdev->dev, "Invalid resin-warm-reset-type\n");
+		pon->resin_warm_reset_type = -EINVAL;
+	}
+
+	rc = of_property_read_u32(pon->pdev->dev.of_node,
+				"qcom,resin-hard-reset-type",
+				&pon->resin_hard_reset_type);
+	if (rc) {
+		if (rc != -EINVAL) {
+			dev_err(&pdev->dev, "Unable to read resin hard reset poweroff type rc: %d\n",
+				rc);
+			goto err_out;
+		}
+		pon->resin_hard_reset_type = -EINVAL;
+	} else if (pon->resin_hard_reset_type <= PON_POWER_OFF_RESERVED ||
+			pon->resin_hard_reset_type >= PON_POWER_OFF_MAX_TYPE) {
+		dev_err(&pdev->dev, "Invalid resin-hard-reset-type\n");
+		pon->resin_hard_reset_type = -EINVAL;
+	}
+
+	rc = of_property_read_u32(pon->pdev->dev.of_node,
+				"qcom,resin-shutdown-type",
+				&pon->resin_shutdown_type);
+	if (rc) {
+		if (rc != -EINVAL) {
+			dev_err(&pdev->dev, "Unable to read resin shutdown poweroff type rc: %d\n",
+				rc);
+			goto err_out;
+		}
+		pon->resin_shutdown_type = -EINVAL;
+	} else if (pon->resin_shutdown_type <= PON_POWER_OFF_RESERVED ||
+			pon->resin_shutdown_type >= PON_POWER_OFF_MAX_TYPE) {
+		dev_err(&pdev->dev, "Invalid resin-shutdown-type\n");
+		pon->resin_shutdown_type = -EINVAL;
+	}
+
+	pon->resin_hard_reset_disable = of_property_read_bool(pdev->dev.of_node,
+					"qcom,resin-hard-reset-disable");
+	pon->resin_shutdown_disable = of_property_read_bool(pdev->dev.of_node,
+					"qcom,resin-shutdown-disable");
+
 	rc = device_create_file(&pdev->dev, &dev_attr_debounce_us);
 	if (rc) {
 		dev_err(&pdev->dev, "sys file creation failed rc: %d\n", rc);
-		return rc;
+		goto err_out;
 	}
 
 	if (of_property_read_bool(pdev->dev.of_node,
@@ -2507,7 +2750,8 @@ static int qpnp_pon_probe(struct platform_device *pdev)
 		if (sys_reset) {
 			dev_err(&pdev->dev,
 				"qcom,system-reset property shouldn't be used along with qcom,secondary-pon-reset property\n");
-			return -EINVAL;
+			rc = -EINVAL;
+			goto err_out;
 		}
 		spin_lock_irqsave(&spon_list_slock, flags);
 		list_add(&pon->list, &spon_dev_list);
@@ -2519,8 +2763,16 @@ static int qpnp_pon_probe(struct platform_device *pdev)
 	pon->store_hard_reset_reason = of_property_read_bool(pdev->dev.of_node,
 					"qcom,store-hard-reset-reason");
 
+	pon->legacy_hard_reset_offset = of_property_read_bool(pdev->dev.of_node,
+					"qcom,use-legacy-hard-reset-offset");
+
 	qpnp_pon_debugfs_init(pdev);
 	return 0;
+
+err_out:
+	if (sys_reset)
+		sys_reset_dev = NULL;
+	return rc;
 }
 
 static int qpnp_pon_remove(struct platform_device *pdev)

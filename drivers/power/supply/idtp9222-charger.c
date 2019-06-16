@@ -81,8 +81,7 @@ do {								\
 #define REG_ADDR_EPT		0x3F
 #define REG_ADDR_OPMODE		0x4C
 #define REG_ADDR_COMMAND	0x4E
-#define REG_ADDR_FODSTART	0x70
-#define REG_ADDR_FODEND		0x7F
+#define REG_ADDR_TXID		0xC2
 
 // For VOUT register
 #define VOUT_V5P5		0x37
@@ -101,6 +100,8 @@ do {								\
 // For votables
 #define DISABLE_BY_USB		"DISABLE_BY_USB"
 #define DISABLE_IN_RECOVERY	"DISABLE_IN_RECOVERY"
+#define WLC_CS100_VOTE		"WLC_CS100_VOTE"
+#define WLC_THERMAL_VOTER	"WLC_THERMAL_VOTER"
 
 enum idtp9222_print {
 	IDT_ASSERT	= BIT(0),
@@ -123,11 +124,14 @@ struct idtp9222_struct {
 	struct power_supply*	wlc_psy;
 	struct i2c_client* 	wlc_client;
 	struct votable*		wlc_disable;
+	struct votable*		wlc_voltage;
 	struct device* 		wlc_device;
 	/* idtp9222 delayed_works */
 	struct delayed_work	timer_maxinput;
 	struct delayed_work	timer_recovery;
 	struct delayed_work 	timer_setoff;
+	struct delayed_work	timer_overheat;
+	struct delayed_work	polling_temp;
 	struct delayed_work 	logger_gpios;
 	/* shadow status */
 	bool			status_onpad;		// opposite to gpio_detached
@@ -136,7 +140,6 @@ struct idtp9222_struct {
 	bool			status_overheat;
 	int 			status_capacity;
 	int			status_temperature;
-	int			status_voltage;
 	/* onpad flags */
 	enum idtp9222_opmode	opmode_type;		// WPC or PMA
 	bool			opmode_midpower;	// 9W or 5W
@@ -144,9 +147,6 @@ struct idtp9222_struct {
 	int			gpio_idtfault;		// MSM GPIO #52, DIR_IN(interrupt)
 	int			gpio_detached;		// MSM GPIO #37, DIR_IN(interrupt)
 	int			gpio_disabled;		// PMI GPIO #09, DIR_OUT(command)
-	/* FOD parameters */
-	char			fod_bpp [REG_ADDR_FODEND-REG_ADDR_FODSTART+1];
-	char			fod_epp [REG_ADDR_FODEND-REG_ADDR_FODSTART+1];
 	/* configuration from DT */
 	int			configure_bppcurr;
 	int			configure_eppcurr;
@@ -327,7 +327,7 @@ static bool idtp9222_set_current(struct idtp9222_struct* idtp9222) {
 	struct power_supply* psy_dc  = power_supply_get_by_name("dc");
 
 	if (psy_dc) {
-		union power_supply_propval current_ua = {0, };
+		union power_supply_propval current_ua = { .intval = 0, };
 
 		current_ua.intval = idtp9222->opmode_midpower ?
 			idtp9222->configure_eppcurr : idtp9222->configure_bppcurr;
@@ -341,25 +341,52 @@ static bool idtp9222_set_current(struct idtp9222_struct* idtp9222) {
 }
 
 static bool idtp9222_set_fod(struct idtp9222_struct* idtp9222) {
-	const char* parameters = idtp9222->opmode_midpower ? idtp9222->fod_epp : idtp9222->fod_bpp;
+	const char* arr_fod = NULL;
+	const char* arr_addr = NULL;
+	char buf [15] = { 0, };
+	int len_fod = -1, len_addr = -1;
 	u16 i;
-	for (i=0; i<REG_ADDR_FODEND-REG_ADDR_FODSTART+1; ++i)
-		idtp9222_reg_write(idtp9222->wlc_client,
-			REG_ADDR_FODSTART + i, parameters[i]);
+	u8 txid = 0;
 
-	// Returning for further purpose
+	arr_addr = of_get_property(idtp9222->wlc_device->of_node,
+		"idt,fod-addr", &len_addr);
+	if (!arr_addr) {
+		pr_idt(IDT_ERROR, "Fail to get FOD address\n");
+		return false;
+	}
+
+	if (idtp9222_reg_read(idtp9222->wlc_client, REG_ADDR_TXID, &txid)
+		&& snprintf(buf, sizeof(buf), "idt,fod-0x%04x", txid)) {
+		arr_fod = of_get_property(idtp9222->wlc_device->of_node,
+			of_find_property(idtp9222->wlc_device->of_node, buf, NULL)
+				? buf : idtp9222->opmode_midpower
+				? "idt,fod-epp" : "idt,fod-bpp", &len_fod);
+	}
+	if (!arr_fod || len_addr != len_fod) {
+		pr_idt(IDT_ERROR, "Fail to get FOD value\n");
+		return false;
+	}
+
+	for (i=0; i<len_fod; ++i)
+		idtp9222_reg_write(idtp9222->wlc_client,
+			arr_addr[i], arr_fod[i]);
+
 	return true;
 }
 
 static bool idtp9222_set_capacity(struct idtp9222_struct* idtp9222) {
-	if ((idtp9222->opmode_type == WPC) && (idtp9222->status_capacity < 100)) {
-		/* CS100 is special signal for some TX pads */
-
-		idtp9222_reg_write(idtp9222->wlc_client, REG_ADDR_CHGSTAT,
-			idtp9222->status_capacity);
-		idtp9222_reg_write(idtp9222->wlc_client, REG_ADDR_COMMAND,
-			SEND_CHGSTAT);
+	if (idtp9222->status_capacity < 100) {
+		if (idtp9222->opmode_type == WPC) {
+			/* CS100 is special signal for some TX pads */
+			idtp9222_reg_write(idtp9222->wlc_client, REG_ADDR_CHGSTAT,
+				idtp9222->status_capacity);
+			idtp9222_reg_write(idtp9222->wlc_client, REG_ADDR_COMMAND,
+				SEND_CHGSTAT);
+		}
+		vote(idtp9222->wlc_voltage, WLC_CS100_VOTE, false, 0);
 	}
+	else
+		vote(idtp9222->wlc_voltage, WLC_CS100_VOTE, true, IDTP9222_VOLTAGE_MV_BPP);
 
 	// Returning for further purpose
 	return true;
@@ -375,47 +402,21 @@ static bool idtp9222_set_maxinput(/* @Nullable */ struct idtp9222_struct* idtp92
 	return true;
 }
 
-static bool idtp9222_set_voltage(struct idtp9222_struct* idtp9222, int mV) {
-	u8 voltage = -1;
-	switch (mV) {
-	case IDTP9222_VOLTAGE_MV_BPP:
-		voltage = VOUT_V5P5;
-		break;
-	case IDTP9222_VOLTAGE_MV_EPP:
-	default:
-		voltage = VOUT_V9P0;
-	}
-
-	if (idtp9222_is_onpad(idtp9222) && idtp9222->opmode_midpower) {
-		u8 value = -1;
-
-		idtp9222_reg_read(idtp9222->wlc_client, REG_ADDR_VOUT, &value);
-		if (voltage != value) {
-			idtp9222_reg_write(idtp9222->wlc_client, REG_ADDR_VOUT, voltage);
-		}
-		idtp9222_reg_read(idtp9222->wlc_client, REG_ADDR_VOUT, &value);
-		pr_idt(IDT_REGISTER, "set voltage %dmV(0x%02x)\n", mV, value);
-	}
-
-	if (idtp9222->status_voltage != mV)
-		idtp9222->status_voltage = mV;
-
-	return true;
-}
-
 static bool idtp9222_set_overheat(struct idtp9222_struct* idtp9222) {
+	#define TIMER_OVERHEAT_MS	3000
 	/* On shutdown by overheat during wireless charging, send EPT by OVERHEAT */
 	if (idtp9222->status_temperature >= idtp9222->configure_overheat) {
 		if (!idtp9222_is_onpad(idtp9222) || idtp9222->status_overheat)
 			return true;
 
-		pr_idt(IDT_MONITOR, "The device is overheat, Send EPT_BY_OVERTEMP after 500ms\n");
-		msleep(500);
+		pr_idt(IDT_MONITOR, "The device is overheat, Send EPT_BY_OVERTEMP\n");
 
 		if (idtp9222_reg_write(idtp9222->wlc_client, REG_ADDR_EPT, EPT_BY_OVERTEMP) &&
 			idtp9222_reg_write(idtp9222->wlc_client, REG_ADDR_COMMAND, SEND_EPT)) {
-			pr_idt(IDT_MONITOR, "Success to turn off TX\n");
+			pr_idt(IDT_MONITOR, "Send EPT_BY_OVERTEMP!\n");
 			idtp9222->status_overheat = true;
+			schedule_delayed_work(&idtp9222->timer_overheat,
+				round_jiffies_relative(msecs_to_jiffies(TIMER_OVERHEAT_MS)));
 		}
 		else {
 			pr_idt(IDT_ERROR, "Failed to turning off by EPT_BY_OVERTEMP\n");
@@ -488,10 +489,15 @@ static bool psy_set_onpad(struct idtp9222_struct* idtp9222, bool onpad) {
 		idtp9222_set_fod(idtp9222);
 		// Rewrite default current
 		idtp9222_set_current(idtp9222);
+		// Reset overheat for reconnection in high temp
+		idtp9222->status_overheat = false;
+		// Start polling event for overheat
+		schedule_delayed_work(&idtp9222->polling_temp, 0);
 
 		pr_idt(IDT_REGISTER, "TX mode 0x%02x = %s%s\n", value,
 			idtp9222_modename(idtp9222->opmode_type),
-			idtp9222->opmode_type == UNKNOWN ? "" : (idtp9222->opmode_midpower ? "(9W)" : "(5W)"));
+			idtp9222->opmode_type == UNKNOWN ? "" :
+			(idtp9222->opmode_midpower ? "(9W)" : "(5W)"));
 	}
 	else { /* Off pad conditions
 		* 1: idtp9222->gpio_detached HIGH (means device is far from pad) or
@@ -505,17 +511,14 @@ static bool psy_set_onpad(struct idtp9222_struct* idtp9222, bool onpad) {
 		idtp9222->opmode_type = UNKNOWN;
 		idtp9222->opmode_midpower = false;
 		idtp9222->status_full = false;
+
+		// Stop polling event for overheat
+		cancel_delayed_work(&idtp9222->polling_temp);
 	}
 
 	if (idtp9222->status_onpad != onpad) {
 		idtp9222->status_onpad = onpad;
 		power_supply_changed(idtp9222->wlc_psy);
-
-		// Check to overheat condition
-		idtp9222_set_overheat(idtp9222);
-		// Set Voltage Max
-		idtp9222_set_voltage(idtp9222, idtp9222->status_voltage);
-
 		pr_idt(IDT_UPDATE, "%s onpad %d\n", IDTP9222_NAME_PSY,
 			idtp9222_is_onpad(idtp9222));
 		return true;
@@ -531,6 +534,9 @@ static bool psy_set_dcin(struct idtp9222_struct* idtp9222, bool dcin) {
 		/* In the case of DCIN, release IBAT/IDC for 5 secs to establish wireless link */
 		#define UNVOTING_TIMER_MS 5000
 		if (idtp9222->status_dcin) {
+			idtp9222_set_overheat(idtp9222);
+			rerun_election(idtp9222->wlc_voltage);
+
 			if (idtp9222->opmode_midpower) {
 				pr_idt(IDT_UPDATE, "Releasing IBAT/IDC for %d ms\n", UNVOTING_TIMER_MS);
 				idtp9222_set_maxinput(idtp9222, true);
@@ -621,6 +627,8 @@ static bool psy_set_temperature(struct idtp9222_struct* idtp9222, int temperatur
 		return false;
 	}
 
+	pr_idt(IDT_UPDATE, "status_temperature %d -> %d\n",
+		idtp9222->status_temperature, temperature);
 	idtp9222->status_temperature = temperature;
 	idtp9222_set_overheat(idtp9222);
 
@@ -642,7 +650,15 @@ static int psy_get_power(struct idtp9222_struct* idtp9222) {
 	return power;
 }
 
-static int psy_get_voltage(struct idtp9222_struct* idtp9222) {
+static int psy_get_current_max(struct idtp9222_struct* idtp9222) {
+	if (idtp9222_is_onpad(idtp9222))
+		return idtp9222->opmode_midpower
+			? idtp9222->configure_eppcurr : idtp9222->configure_bppcurr;
+	else
+		return 0;
+}
+
+static int psy_get_voltage_max(struct idtp9222_struct* idtp9222) {
 	if (idtp9222_is_onpad(idtp9222))
 		return (idtp9222->opmode_midpower
 			? IDTP9222_VOLTAGE_MV_EPP : IDTP9222_VOLTAGE_MV_BPP)
@@ -651,11 +667,25 @@ static int psy_get_voltage(struct idtp9222_struct* idtp9222) {
 		return 0;
 }
 
+static int psy_get_voltage_now(struct idtp9222_struct* idtp9222) {
+	u8 value = -1;
+
+	if (idtp9222_is_onpad(idtp9222)) {
+		idtp9222_reg_read(idtp9222->wlc_client, REG_ADDR_VOUT, &value);
+		return (value == VOUT_V9P0
+			? IDTP9222_VOLTAGE_MV_EPP : IDTP9222_VOLTAGE_MV_BPP)
+			* 1000 /* Convert to uV */;
+	} else
+		return 0;
+}
+
 static enum power_supply_property psy_property_list [] = {
 	POWER_SUPPLY_PROP_ONLINE,
 	POWER_SUPPLY_PROP_PRESENT,
 	POWER_SUPPLY_PROP_POWER_NOW,
+	POWER_SUPPLY_PROP_CURRENT_MAX,
 	POWER_SUPPLY_PROP_VOLTAGE_MAX,
+	POWER_SUPPLY_PROP_VOLTAGE_NOW,
 	POWER_SUPPLY_PROP_CHARGE_DONE,
 	POWER_SUPPLY_PROP_CHARGING_ENABLED,
 };
@@ -673,7 +703,7 @@ static int psy_property_set(struct power_supply* psy,
 		psy_set_enable(idtp9222, !!val->intval);
 		break;
 	case POWER_SUPPLY_PROP_VOLTAGE_MAX:
-		idtp9222_set_voltage(idtp9222, val->intval);
+		vote(idtp9222->wlc_voltage, WLC_THERMAL_VOTER, true, val->intval);
 		break;
 	default:
 		break;
@@ -702,11 +732,17 @@ static int psy_property_get(struct power_supply* psy,
 	case POWER_SUPPLY_PROP_PRESENT:
 		val->intval = idtp9222_is_onpad(idtp9222);
 		break;
-	case POWER_SUPPLY_PROP_POWER_NOW :
+	case POWER_SUPPLY_PROP_POWER_NOW:
 		val->intval = psy_get_power(idtp9222);
 		break;
-	case POWER_SUPPLY_PROP_VOLTAGE_MAX :
-		val->intval = psy_get_voltage(idtp9222);
+	case POWER_SUPPLY_PROP_CURRENT_MAX:
+		val->intval = psy_get_current_max(idtp9222);
+		break;
+	case POWER_SUPPLY_PROP_VOLTAGE_MAX:
+		val->intval = psy_get_voltage_max(idtp9222);
+		break;
+	case POWER_SUPPLY_PROP_VOLTAGE_NOW:
+		val->intval = psy_get_voltage_now(idtp9222);
 		break;
 	case POWER_SUPPLY_PROP_CHARGE_DONE:
 		val->intval = idtp9222_is_full(idtp9222);
@@ -766,8 +802,6 @@ static void psy_external_changed(struct power_supply* psy_me) {
 		power_supply_put(psy_dc);
 	}
 	if (psy_battery) {
-		if (!power_supply_get_property(psy_battery, POWER_SUPPLY_PROP_TEMP, &value))
-			psy_set_temperature(idtp9222, value.intval);
 		if (!power_supply_get_property(psy_battery, POWER_SUPPLY_PROP_CAPACITY, &value))
 			psy_set_capacity(idtp9222, value.intval);
 
@@ -795,7 +829,7 @@ static void idtp9222_timer_setoff(struct work_struct* work) {
 	struct idtp9222_struct* idtp9222 = container_of(work, struct idtp9222_struct,
 		timer_setoff.work);
 
-	#define RECOVERY_TIMER_MS 5000
+	#define RECOVERY_TIMER_MS 1000
 	if (idtp9222_is_onpad(idtp9222)) {
 		struct power_supply* psy  = power_supply_get_by_name("dc");
 		union power_supply_propval val = { .intval = 0, };
@@ -813,6 +847,44 @@ static void idtp9222_timer_setoff(struct work_struct* work) {
 	}
 }
 
+static void idtp9222_timer_overheat(struct work_struct* work) {
+	struct idtp9222_struct* idtp9222 = container_of(work, struct idtp9222_struct,
+		timer_overheat.work);
+	struct power_supply* psy_dc = power_supply_get_by_name("dc");
+	union power_supply_propval value = { .intval = 0, };
+
+	if (psy_dc) {
+		if (!power_supply_get_property(psy_dc, POWER_SUPPLY_PROP_PRESENT, &value)) {
+			if (!!value.intval) {
+				idtp9222->status_overheat = false;
+				idtp9222_set_overheat(idtp9222);
+			}
+			else
+				pr_idt(IDT_MONITOR, "Success to turn off Tx by OVERHEAT\n");
+		}
+
+		power_supply_put(psy_dc);
+	}
+}
+
+static void idtp9222_polling_temp(struct work_struct* work) {
+	struct idtp9222_struct* idtp9222 = container_of(work, struct idtp9222_struct,
+		polling_temp.work);
+	struct power_supply* psy_battery = power_supply_get_by_name("battery");
+	union power_supply_propval value = { .intval = 0, };
+
+	#define POLLING_TEMP_MS 30000
+	if (psy_battery) {
+		if (!power_supply_get_property(psy_battery, POWER_SUPPLY_PROP_TEMP, &value))
+			psy_set_temperature(idtp9222, value.intval);
+
+		power_supply_put(psy_battery);
+	}
+
+	schedule_delayed_work(&idtp9222->polling_temp, round_jiffies_relative
+		(msecs_to_jiffies(POLLING_TEMP_MS)));
+}
+
 static void idtp9222_logger_gpios(struct work_struct* work) {
 	struct idtp9222_struct* idtp9222 = container_of(work, struct idtp9222_struct,
 		logger_gpios.work);
@@ -820,7 +892,7 @@ static void idtp9222_logger_gpios(struct work_struct* work) {
 	// Monitor 3 GPIOs
 	int idtfault = gpio_get_value(idtp9222->gpio_idtfault);
 	int detached = gpio_get_value(idtp9222->gpio_detached);
-	int disabled = gpio_get_value(idtp9222->gpio_disabled);
+	int disabled = get_effective_result_locked(idtp9222->wlc_disable);
 	pr_err(	"MSM_GPIO%d(<-OD2_N, idtfault):%d, "
 		"MSM_GPIO%d(<-PDT_N, detached):%d, "
 		"PMI_GPIO%d(->OFF_P, disabled):%d\n",
@@ -844,6 +916,32 @@ static int idtp9222_disable_callback(struct votable *votable, void *data,
 	gpiod_set_value(gpio_to_desc(idtp9222->gpio_disabled), !!disabled);
 	if (disabled)
 		psy_set_onpad(idtp9222, false);
+
+	msleep(20);
+
+	pr_assert(gpio_get_value(idtp9222->gpio_disabled)==disabled);
+	pr_idt(IDT_INTERRUPT, "idtp9222_disable_callback is written %s : %d\n",
+		(gpio_get_value(idtp9222->gpio_disabled) == disabled)
+		? "success!" : "fail!", disabled);
+
+	return 0;
+}
+
+static int idtp9222_voltage_callback(struct votable *votable, void *data,
+	int mV, const char *client) {
+	struct idtp9222_struct* idtp9222 = data;
+
+	if (mV < 0)
+		return 0;
+
+	if (idtp9222_is_onpad(idtp9222) && idtp9222->opmode_midpower) {
+		u8 value = -1;
+
+		idtp9222_reg_write(idtp9222->wlc_client, REG_ADDR_VOUT,
+			mV < IDTP9222_VOLTAGE_MV_EPP ? VOUT_V5P5 : VOUT_V9P0);
+		idtp9222_reg_read(idtp9222->wlc_client, REG_ADDR_VOUT, &value);
+		pr_idt(IDT_REGISTER, "set voltage %dmV(0x%02x)\n", mV, value);
+	}
 
 	return 0;
 }
@@ -879,7 +977,6 @@ static irqreturn_t idtp9222_isr_detached(int irq, void* data) {
 
 static bool idtp9222_probe_devicetree(struct device_node* dnode,
 	struct idtp9222_struct* idtp9222) {
-	const char*	arr = NULL;
 	int		buf = -1;
 
 	if (!dnode) {
@@ -905,23 +1002,6 @@ static bool idtp9222_probe_devicetree(struct device_node* dnode,
 		pr_idt(IDT_ERROR, "Fail to get gpio-disabled\n");
 		return false;
 	}
-
-/* Parse FOD parameters */
-	arr = of_get_property(dnode, "idt,fod-bpp", &buf);
-	if (!arr || buf != ARRAY_SIZE(idtp9222->fod_bpp)) {
-		pr_idt(IDT_ERROR, "Fail to get idt,fod-bpp\n");
-		return false;
-	}
-	else
-		memcpy(idtp9222->fod_bpp, arr, buf);
-
-	arr = of_get_property(dnode, "idt,fod-epp", &buf);
-	if (!arr || buf != ARRAY_SIZE(idtp9222->fod_epp)) {
-		pr_idt(IDT_ERROR, "Fail to get idt,fod-epp\n");
-		return false;
-	}
-	else
-		memcpy(idtp9222->fod_epp, arr, buf);
 
 /* Parse misc */
 	if (of_property_read_u32(dnode, "idt,configure-bppcurr", &buf) < 0)
@@ -1061,6 +1141,8 @@ static int idtp9222_remove(struct i2c_client* client) {
 		cancel_delayed_work_sync(&idtp9222->timer_maxinput);
 		cancel_delayed_work_sync(&idtp9222->timer_recovery);
 		cancel_delayed_work_sync(&idtp9222->timer_setoff);
+		cancel_delayed_work_sync(&idtp9222->timer_overheat);
+		cancel_delayed_work_sync(&idtp9222->polling_temp);
 		cancel_delayed_work_sync(&idtp9222->logger_gpios);
 		destroy_votable(idtp9222->wlc_disable);
 
@@ -1129,11 +1211,17 @@ static int idtp9222_probe(struct i2c_client* client, const struct i2c_device_id*
 		VOTE_SET_ANY,
 		idtp9222_disable_callback,
 		idtp9222);
+	idtp9222->wlc_voltage = create_votable("WLC_VOLTAGE",
+		VOTE_MIN,
+		idtp9222_voltage_callback,
+		idtp9222);
 
 	// For delayed works
 	INIT_DELAYED_WORK(&idtp9222->timer_maxinput, idtp9222_timer_maxinput);
 	INIT_DELAYED_WORK(&idtp9222->timer_recovery, idtp9222_timer_recovery);
 	INIT_DELAYED_WORK(&idtp9222->timer_setoff, idtp9222_timer_setoff);
+	INIT_DELAYED_WORK(&idtp9222->timer_overheat, idtp9222_timer_overheat);
+	INIT_DELAYED_WORK(&idtp9222->polling_temp, idtp9222_polling_temp);
 	INIT_DELAYED_WORK(&idtp9222->logger_gpios, idtp9222_logger_gpios);
 	schedule_delayed_work(&idtp9222->logger_gpios, 0);
 

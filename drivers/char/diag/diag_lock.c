@@ -24,13 +24,12 @@
 #include "diag_lock.h"
 
 #include <soc/qcom/lge/board_lge.h>
-#if defined(CONFIG_LGE_USB_DIAG_LOCK_SPR) || defined(CONFIG_LGE_ONE_BINARY_SKU)
+#ifdef CONFIG_LGE_USB_DIAG_LOCK_SPR
 #include <soc/qcom/smem.h>
 #endif
 
 static diag_lock_state_t diag_lock_state = DIAG_LOCK_STATE_LOCK;
 
-#ifndef CONFIG_LGE_ONE_BINARY_SKU
 static unsigned char allowed_commands[] = {
 #ifdef CONFIG_LGE_USB_DIAG_LOCK_SPR
 	0xA1, // port lock
@@ -46,9 +45,8 @@ static unsigned char allowed_commands[] = {
 	0xFA, // testmode
 #endif
 };
-#endif
 
-#if defined(CONFIG_LGE_USB_DIAG_LOCK_SPR) || defined(CONFIG_LGE_ONE_BINARY_SKU)
+#ifdef CONFIG_LGE_USB_DIAG_LOCK_SPR
 static diag_lock_state_t get_diag_lock_state_from_smem(void)
 {
 	struct _smem_id_vendor0 {
@@ -61,9 +59,11 @@ static diag_lock_state_t get_diag_lock_state_from_smem(void)
 		char model_name[16];
 		char sw_version[64];
 		char operator_name[16];
+#ifdef CONFIG_LGE_ONE_BINARY_SKU
 		char ntcode[2048];
 		char lg_modem_name[20];
 		unsigned int sim_num;
+#endif
 		uint32_t flag_gpio; /* flex gpio */
 		char diag_enable;
 	} *smem_id_vendor0 = NULL;
@@ -87,22 +87,22 @@ static diag_lock_state_t get_diag_lock_state_from_smem(void)
 
 bool diag_lock_is_allowed(void)
 {
-#if defined(CONFIG_LGE_USB_FACTORY) && !defined(CONFIG_LGE_USB_DIAG_LOCK_SPR)
-	if (lge_get_factory_boot() && lge_get_laop_operator()!= OP_SPR_US)
-		return true;
+#ifdef CONFIG_LGE_USB_FACTORY
+#if defined(CONFIG_LGE_ONE_BINARY_SKU) || !defined(CONFIG_LGE_USB_DIAG_LOCK_SPR)
+	if (lge_get_factory_boot())
+#ifdef CONFIG_LGE_ONE_BINARY_SKU
+            if(lge_get_laop_operator() != OP_SPR_US)
 #endif
+		    return true;
+#endif
+#endif /* CONFIG_LGE_USB_FACTORY */
 	return diag_lock_state == DIAG_LOCK_STATE_UNLOCK;
 }
 EXPORT_SYMBOL(diag_lock_is_allowed);
 
 bool diag_lock_is_allowed_command(const unsigned char *buf)
 {
-#ifndef CONFIG_LGE_ONE_BINARY_SKU
 	int i;
-#else
-	int opcode = -1;
-#endif
-
 
 	if (!buf)
 		return false;
@@ -111,54 +111,56 @@ bool diag_lock_is_allowed_command(const unsigned char *buf)
 		return true;
 
 #ifdef CONFIG_LGE_ONE_BINARY_SKU
-	opcode = lge_get_laop_operator();
-	pr_info("%s: opcode = %d\n",__func__, opcode);
-	switch(opcode)
-	{
-		case OP_SPR_US:
-			switch(buf[0])
-			{
-				case 0xA1:	//port lock
-					return true;
-				default:
-					break;
-			}
-			break;
+	i = lge_get_laop_operator();
+	pr_info("%s: opcode = %d\n",__func__, i);
 
-		case OP_VZW_POSTPAID:
-		case OP_VZW_PREPAID:
-			switch(buf[0])
-			{
-				case 0xF8:	//vzw at lock
-					return true;
-			}
+	switch (i) {
+	case OP_SPR_US:
+		switch (buf[0]) {
+		case 0xA1:	//port lock
+			return true;
 		default:
-			switch(buf[0])
-			{
-				case 0x29: //testmode reset
-				case 0x3A: //dload reset
-				case 0x7E: //async hdlc flag
-				case 0xA1: //port lock
-				case 0xEF: //web download
-				case 0xFA: //testmode
-					return true;
-				default:
-					break;
-			}
 			break;
+		}
+
+		return false;
+
+	case OP_VZW_POSTPAID:
+	case OP_VZW_PREPAID:
+		switch (buf[0]) {
+		case 0xF8:	//vzw at lock
+			return true;
+		default:
+			break;
+		}
+		/* fall-through */
+	default:
+		switch (buf[0]) {
+		case 0x29: //testmode reset
+		case 0x3A: //dload reset
+		case 0x7E: //async hdlc flag
+		case 0xA1: //port lock
+		case 0xEF: //web download
+		case 0xFA: //testmode
+			return true;
+		default:
+			break;
+		}
+
+		return false;
 	}
-#else
+#endif
+
 	for (i = 0; i < sizeof(allowed_commands); i++) {
 		if (allowed_commands[i] == buf[0])
 			return true;
 	}
-#endif
 
 	return false;
 }
 EXPORT_SYMBOL(diag_lock_is_allowed_command);
 
-#if defined(CONFIG_LGE_USB_DIAG_LOCK_SPR) || defined(CONFIG_LGE_ONE_BINARY_SKU)
+#ifdef CONFIG_LGE_USB_DIAG_LOCK_SPR
 void diag_lock_set_allowed(bool allowed)
 {
 	diag_lock_state = allowed;
@@ -212,13 +214,10 @@ static int __init diag_lock_init(void)
 {
 	int rc;
 
-#if defined(CONFIG_LGE_ONE_BINARY_SKU)
+#ifdef CONFIG_LGE_USB_DIAG_LOCK_SPR
+#ifdef CONFIG_LGE_ONE_BINARY_SKU
 	if (lge_get_laop_operator() == OP_SPR_US)
-	{
-		pr_info("%s: LAOP SPR get_diag_lock_state_from_smem[%d]\n",__func__, diag_lock_state);
-		diag_lock_state = get_diag_lock_state_from_smem();
-	}
-#elif defined(CONFIG_LGE_USB_DIAG_LOCK_SPR)
+#endif
 	diag_lock_state = get_diag_lock_state_from_smem();
 #endif
 

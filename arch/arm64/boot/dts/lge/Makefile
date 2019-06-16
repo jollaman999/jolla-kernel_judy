@@ -63,10 +63,6 @@ ifeq ($(CONFIG_MACH_SDM845_JUDYPN_LAO_COM),y)
 DTS_TARGET := sdm845-judypn_lao_com
 endif
 
-ifeq ($(CONFIG_MACH_SDM845_JUDYPN_LAO_LDU),y)
-DTS_TARGET := sdm845-judypn_lao_ldu
-endif
-
 ifeq ($(CONFIG_MACH_SDM845_JUDYPN_VZW),y)
 DTS_TARGET := sdm845-judypn_vzw
 endif
@@ -90,6 +86,11 @@ endif
 
 ifeq ($(CONFIG_MACH_SDM845_JUDYP_SPR),y)
 DTS_TARGET := sdm845-judyp_spr
+endif
+
+# Per Device - GOLED
+ifeq ($(CONFIG_MACH_SDM845_BETA_LAO_COM),y)
+DTS_TARGET := sdm845-beta_lao_com
 endif
 
 ALL_DTS := $(notdir $(wildcard echo $(srctree)/$(src)/$(DTS_PROJECT)/$(DTS_TARGET)/*.dts))

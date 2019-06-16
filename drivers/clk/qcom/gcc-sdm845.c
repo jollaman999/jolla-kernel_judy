@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016-2017, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2016-2018, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -35,6 +35,12 @@
 #include "reset.h"
 #include "clk-alpha-pll.h"
 #include "vdd-level-sdm845.h"
+#include "clk-voter.h"
+
+#ifdef CONFIG_MACH_LGE
+#include <soc/qcom/lge/board_lge.h>
+#endif
+
 
 #define GCC_MMSS_MISC				0x09FFC
 #define GCC_GPU_MISC				0x71028
@@ -971,13 +977,23 @@ static const struct freq_tbl ftbl_gcc_sdcc2_apps_clk_src[] = {
 	F(25000000, P_GPLL0_OUT_EVEN, 12, 0, 0),
 	F(50000000, P_GPLL0_OUT_EVEN, 6, 0, 0),
 	F(100000000, P_GPLL0_OUT_MAIN, 6, 0, 0),
-#ifdef CONFIG_MACH_SDM845_JUDYP
-	F(201500000, P_GPLL4_OUT_MAIN, 4.5, 0, 0),
-#else
 	F(201500000, P_GPLL4_OUT_MAIN, 4, 0, 0),
-#endif
 	{ }
 };
+
+#ifdef CONFIG_MACH_LGE
+static const struct freq_tbl ftbl_gcc_sdcc2_apps_clk_src_limit_max[] = {
+	F(400000, P_BI_TCXO, 12, 1, 4),
+	F(9600000, P_BI_TCXO, 2, 0, 0),
+	F(19200000, P_BI_TCXO, 1, 0, 0),
+	F(25000000, P_GPLL0_OUT_EVEN, 12, 0, 0),
+	F(50000000, P_GPLL0_OUT_EVEN, 6, 0, 0),
+	F(100000000, P_GPLL0_OUT_MAIN, 6, 0, 0),
+	F(201500000, P_GPLL4_OUT_MAIN, 4.5, 0, 0),
+	{ }
+};
+#endif
+
 
 static struct clk_rcg2 gcc_sdcc2_apps_clk_src = {
 	.cmd_rcgr = 0x1400c,
@@ -1508,6 +1524,11 @@ static struct clk_branch gcc_aggre_ufs_phy_axi_clk = {
 		},
 	},
 };
+
+static DEFINE_CLK_VOTER(ufs_phy_axi_emmc_vote_clk,
+					gcc_aggre_ufs_phy_axi_clk, 0);
+static DEFINE_CLK_VOTER(ufs_phy_axi_ufs_vote_clk,
+					gcc_aggre_ufs_phy_axi_clk, 0);
 
 static struct clk_branch gcc_aggre_ufs_phy_axi_hw_ctl_clk = {
 	.halt_reg = 0x82024,
@@ -3784,6 +3805,8 @@ struct clk_hw *gcc_sdm845_hws[] = {
 	[MEASURE_ONLY_CNOC_CLK] = &measure_only_cnoc_clk.hw,
 	[MEASURE_ONLY_BIMC_CLK] = &measure_only_bimc_clk.hw,
 	[MEASURE_ONLY_IPA_2X_CLK] = &measure_only_ipa_2x_clk.hw,
+	[UFS_PHY_AXI_EMMC_VOTE_CLK] = &ufs_phy_axi_emmc_vote_clk.hw,
+	[UFS_PHY_AXI_UFS_VOTE_CLK] = &ufs_phy_axi_ufs_vote_clk.hw,
 };
 
 static struct clk_regmap *gcc_sdm845_clocks[] = {
@@ -4065,6 +4088,8 @@ static const struct qcom_cc_desc gcc_sdm845_desc = {
 	.config = &gcc_sdm845_regmap_config,
 	.clks = gcc_sdm845_clocks,
 	.num_clks = ARRAY_SIZE(gcc_sdm845_clocks),
+	.hwclks = gcc_sdm845_hws,
+	.num_hwclks = ARRAY_SIZE(gcc_sdm845_hws),
 	.resets = gcc_sdm845_resets,
 	.num_resets = ARRAY_SIZE(gcc_sdm845_resets),
 };
@@ -4183,6 +4208,22 @@ static void gcc_sdm845_fixup_sdm845v2(void)
 	gcc_ufs_phy_axi_clk_src.freq_tbl =
 		ftbl_gcc_ufs_card_axi_clk_src_sdm845_v2;
 	gcc_vsensor_clk_src.clkr.hw.init->rate_max[VDD_CX_LOW] = 600000000;
+
+#ifdef CONFIG_LGE_ONE_BINARY_SKU
+#ifdef CONFIG_MACH_SDM845_JUDYP
+	if (lge_get_sku_carrier() != HW_SKU_KR) {
+		printk(KERN_INFO "fixup sdcc2 clock\n");
+		gcc_sdcc2_apps_clk_src.freq_tbl =
+			ftbl_gcc_sdcc2_apps_clk_src_limit_max;
+	}
+#elif defined(CONFIG_MACH_SDM845_JUDYLN)
+	if (lge_get_sku_carrier() == HW_SKU_KR) {
+		printk(KERN_INFO "fixup sdcc2 clock\n");
+		gcc_sdcc2_apps_clk_src.freq_tbl =
+			ftbl_gcc_sdcc2_apps_clk_src_limit_max;
+	}
+#endif
+#endif
 }
 
 static void gcc_sdm845_fixup_sdm670(void)
@@ -4283,9 +4324,8 @@ static int gcc_sdm845_fixup(struct platform_device *pdev)
 
 static int gcc_sdm845_probe(struct platform_device *pdev)
 {
-	struct clk *clk;
 	struct regmap *regmap;
-	int i, ret = 0;
+	int ret = 0;
 
 	regmap = qcom_cc_map(pdev, &gcc_sdm845_desc);
 	if (IS_ERR(regmap))
@@ -4310,13 +4350,6 @@ static int gcc_sdm845_probe(struct platform_device *pdev)
 	ret = gcc_sdm845_fixup(pdev);
 	if (ret)
 		return ret;
-
-	/* Register the dummy measurement clocks */
-	for (i = 0; i < ARRAY_SIZE(gcc_sdm845_hws); i++) {
-		clk = devm_clk_register(&pdev->dev, gcc_sdm845_hws[i]);
-		if (IS_ERR(clk))
-			return PTR_ERR(clk);
-	}
 
 	ret = qcom_cc_really_probe(pdev, &gcc_sdm845_desc, regmap);
 	if (ret) {

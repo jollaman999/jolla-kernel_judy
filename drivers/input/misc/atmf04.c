@@ -190,7 +190,7 @@ static int CalData[6][SZ_CALDATA_UNIT];
 
 #define ON_controller                   1
 #define OFF_controller                  2
-#define PATH_SAR_CONTROLLER_CAL  "/vendor/sns/sar_controller_cal.dat"
+#define PATH_SAR_CONTROLLER_CAL  "/mnt/vendor/sns/sar_controller_cal.dat"
 
 #define CH_1                        1
 #define CH_2                        2
@@ -2582,6 +2582,7 @@ static void __exit atmf04_exit(void)
     destroy_workqueue(atmf04_workqueue);
 
   atmf04_workqueue = NULL;
+
   i2c_del_driver(&atmf04_driver);
 }
 

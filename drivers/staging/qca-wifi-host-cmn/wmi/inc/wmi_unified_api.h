@@ -1,9 +1,6 @@
 /*
  * Copyright (c) 2013-2018 The Linux Foundation. All rights reserved.
  *
- * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
- *
- *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
  * above copyright notice and this permission notice appear in all
@@ -17,12 +14,6 @@
  * PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
  * TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
  * PERFORMANCE OF THIS SOFTWARE.
- */
-
-/*
- * This file was originally distributed by Qualcomm Atheros, Inc.
- * under proprietary terms before Copyright ownership was assigned
- * to the Linux Foundation.
  */
 
 /*
@@ -703,6 +694,16 @@ QDF_STATUS wmi_unified_wow_timer_pattern_cmd(void *wmi_hdl, uint8_t vdev_id,
 
 QDF_STATUS wmi_unified_nat_keepalive_en_cmd(void *wmi_hdl, uint8_t vdev_id);
 
+/**
+ * wmi_unified_set_latency_config_cmd()
+ * @wmi_handle: wmi handle
+ * @param: WLM parameters
+ *
+ * Return: QDF_STATUS_SUCCESS on success and QDF_STATUS_E_FAILURE for failure
+ */
+QDF_STATUS wmi_unified_wlm_latency_level_cmd(void *wmi_hdl,
+					struct wlm_latency_level_param *param);
+
 QDF_STATUS wmi_unified_csa_offload_enable(void *wmi_hdl, uint8_t vdev_id);
 
 QDF_STATUS wmi_unified_start_oem_data_cmd(void *wmi_hdl,
@@ -882,8 +883,7 @@ QDF_STATUS wmi_unified_enable_arp_ns_offload_cmd(void *wmi_hdl,
 /**
  * wmi_unified_conf_hw_filter_mode_cmd() - Configure hardware filter
  * @wmi_hdl: wmi handle
- * @vdev_id: device identifier
- * @config_bitmap: bitmap of packet types to drop
+ * @req: HW filter request parameters
  *
  * The hardware filter is only effective in DTIM mode. Use this configuration
  * to blanket drop broadcast/multicast packets at the hardware level, without
@@ -891,9 +891,9 @@ QDF_STATUS wmi_unified_enable_arp_ns_offload_cmd(void *wmi_hdl,
  *
  * Return: QDF_STATUS
  */
-QDF_STATUS wmi_unified_conf_hw_filter_mode_cmd(void *wmi_hdl,
-					       uint8_t vdev_id,
-					       uint8_t config_bitmap);
+QDF_STATUS
+wmi_unified_conf_hw_filter_mode_cmd(void *wmi_hdl,
+				    struct wmi_hw_filter_req_params *req);
 
 QDF_STATUS wmi_unified_set_led_flashing_cmd(void *wmi_hdl,
 				struct flashing_req_params *flashing);
@@ -953,18 +953,72 @@ QDF_STATUS wmi_unified_get_buf_extscan_hotlist_cmd(void *wmi_hdl,
 				   photlist, int *buf_len);
 
 /**
- * wmi_unified_set_active_bpf_mode_cmd() - config active BPF mode in FW
- * @wmi_hdl: the WMI handle
+ * wmi_unified_set_active_apf_mode_cmd() - config active APF mode in FW
+ * @wmi: the WMI handle
  * @vdev_id: the Id of the vdev to apply the configuration to
- * @ucast_mode: the active BPF mode to configure for unicast packets
- * @mcast_bcast_mode: the active BPF mode to configure for multicast/broadcast
+ * @ucast_mode: the active APF mode to configure for unicast packets
+ * @mcast_bcast_mode: the active APF mode to configure for multicast/broadcast
  *	packets
  */
 QDF_STATUS
-wmi_unified_set_active_bpf_mode_cmd(void *wmi_hdl,
+wmi_unified_set_active_apf_mode_cmd(wmi_unified_t wmi,
 				    uint8_t vdev_id,
 				    FW_ACTIVE_BPF_MODE ucast_mode,
 				    FW_ACTIVE_BPF_MODE mcast_bcast_mode);
+
+/**
+ * wmi_unified_send_apf_enable_cmd() - send apf enable/disable cmd
+ * @wmi: wmi handle
+ * @vdev_id: VDEV id
+ * @enable: true: enable, false: disable
+ *
+ * This function passes the apf enable command to fw
+ *
+ * Return: QDF_STATUS_SUCCESS on success and QDF_STATUS_E_FAILURE for failure
+ */
+QDF_STATUS wmi_unified_send_apf_enable_cmd(wmi_unified_t wmi,
+					   uint32_t vdev_id, bool enable);
+
+/**
+ * wmi_unified_send_apf_write_work_memory_cmd() - send cmd to write into the APF
+ *	work memory.
+ * @wmi: wmi handle
+ * @write_params: parameters and buffer pointer for the write
+ *
+ * This function passes the write apf work mem command to fw
+ *
+ * Return: QDF_STATUS_SUCCESS on success and QDF_STATUS_E_FAILURE for failure
+ */
+QDF_STATUS wmi_unified_send_apf_write_work_memory_cmd(wmi_unified_t wmi,
+			struct wmi_apf_write_memory_params *write_params);
+
+/**
+ * wmi_unified_send_apf_read_work_memory_cmd() - send cmd to read part of APF
+ *	work memory
+ * @wmi: wmi handle
+ * @read_params: contains relative address and length to read from
+ *
+ * This function passes the read apf work mem command to fw
+ *
+ * Return: QDF_STATUS_SUCCESS on success and QDF_STATUS_E_FAILURE for failure
+ */
+QDF_STATUS wmi_unified_send_apf_read_work_memory_cmd(wmi_unified_t wmi,
+				struct wmi_apf_read_memory_params *read_params);
+
+/**
+ * wmi_extract_apf_read_memory_resp_event() - exctract read mem resp event
+ * @wmi: wmi handle
+ * @evt_buf: Pointer to the event buffer
+ * @resp: pointer to memory to extract event parameters into
+ *
+ * This function exctracts read mem response event into the given structure ptr
+ *
+ * Return: QDF_STATUS_SUCCESS on success and QDF_STATUS_E_FAILURE for failure
+ */
+QDF_STATUS
+wmi_extract_apf_read_memory_resp_event(wmi_unified_t wmi, void *evt_buf,
+				struct wmi_apf_read_memory_resp_event_params
+								*read_mem_evt);
 
 QDF_STATUS wmi_unified_stats_request_send(void *wmi_hdl,
 				uint8_t macaddr[IEEE80211_ADDR_LEN],
@@ -1400,6 +1454,16 @@ QDF_STATUS wmi_unified_send_sar_limit_cmd(void *wmi_hdl,
 QDF_STATUS wmi_unified_get_sar_limit_cmd(void *wmi_hdl);
 
 /**
+ * wmi_unified_send_coex_config_cmd() - send coex config command to firmware
+ * @wmi_hdl: wmi handle
+ * @params: coex config params
+ *
+ * Return: QDF_STATUS_SUCCESS on success or error code on failure
+ */
+QDF_STATUS wmi_unified_send_coex_config_cmd(void *wmi_hdl,
+					    struct coex_config_params *params);
+
+/**
  * wmi_unified_extract_sar_limit_event() - extract SAR limits from FW event
  * @wmi_hdl: wmi handle
  * @evt_buf: event buffer received from firmware
@@ -1411,6 +1475,18 @@ QDF_STATUS wmi_unified_get_sar_limit_cmd(void *wmi_hdl);
 QDF_STATUS wmi_unified_extract_sar_limit_event(void *wmi_hdl,
 					       uint8_t *evt_buf,
 					       struct sar_limit_event *event);
+
+/**
+ * wmi_unified_extract_sar2_result_event() - extract SAR limits from FW event
+ * @handle: wmi handle
+ * @event: event buffer received from firmware
+ * @len: length of the event buffer
+ *
+ * Return: QDF_STATUS_SUCCESS for success or error code
+ */
+QDF_STATUS wmi_unified_extract_sar2_result_event(void *handle,
+						 uint8_t *event, uint32_t len);
+
 
 QDF_STATUS wmi_unified_send_adapt_dwelltime_params_cmd(void *wmi_hdl,
 				   struct wmi_adaptive_dwelltime_params *
@@ -1496,4 +1572,55 @@ QDF_STATUS wmi_unified_send_dbs_scan_sel_params_cmd(void *wmi_hdl,
 
 QDF_STATUS wmi_unified_send_limit_off_chan_cmd(void *wmi_hdl,
 				   struct wmi_limit_off_chan_param *wmi_param);
+
+/**
+ * wmi_unified_send_roam_scan_stats_cmd() - Wrapper to request roam scan stats
+ * @wmi_hdl: wmi handle
+ * @params: request params
+ *
+ * This function is used to send the roam scan stats request command to
+ * firmware.
+ *
+ * Return: QDF_STATUS_SUCCESS on success and QDF_STATUS_E_FAILURE for failure
+ */
+QDF_STATUS
+wmi_unified_send_roam_scan_stats_cmd(void *wmi_hdl,
+				     struct wmi_roam_scan_stats_req *params);
+
+/**
+ * wmi_extract_roam_scan_stats_res_evt() - API to extract roam scan stats res
+ * @wmi: wmi handle
+ * @evt_buf: pointer to the event buffer
+ * @vdev_id: output pointer to hold vdev id
+ * @res_param: output pointer to hold extracted memory
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS
+wmi_extract_roam_scan_stats_res_evt(wmi_unified_t wmi, void *evt_buf,
+				    uint32_t *vdev_id,
+				    struct wmi_roam_scan_stats_res **res_param);
+/**
+ * wmi_unified_offload_11k_cmd() - send 11k offload command
+ * @wmi_hdl: wmi handle
+ * @params: 11k offload params
+ *
+ * This function passes the 11k offload command params to FW
+ *
+ * Return: QDF_STATUS_SUCCESS on success and QDF_STATUS_E_FAILURE for failure
+ */
+QDF_STATUS wmi_unified_offload_11k_cmd(void *wmi_hdl,
+				struct wmi_11k_offload_params *params);
+
+/**
+ * wmi_unified_invoke_neighbor_report_cmd() - send invoke neighbor report cmd
+ * @wmi_hdl: wmi handle
+ * @params: invoke neighbor report params
+ *
+ * This function passes the invoke neighbor report command to fw
+ *
+ * Return: QDF_STATUS_SUCCESS on success and QDF_STATUS_E_FAILURE for failure
+ */
+QDF_STATUS wmi_unified_invoke_neighbor_report_cmd(void *wmi_hdl,
+			struct wmi_invoke_neighbor_report_params *params);
 #endif /* _WMI_UNIFIED_API_H_ */

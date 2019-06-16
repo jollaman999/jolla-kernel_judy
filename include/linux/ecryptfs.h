@@ -43,9 +43,6 @@
 #define RFC2440_CIPHER_CAST_6 0x0b
 
 #define RFC2440_CIPHER_RSA 0x01
-#ifdef CONFIG_SDP
-#define CIPHER_ECDH 0xf0
-#endif
 
 /**
  * For convenience, we may need to pass around the encrypted session

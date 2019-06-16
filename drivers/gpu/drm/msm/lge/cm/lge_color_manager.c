@@ -185,11 +185,11 @@ static ssize_t image_enhance_set(struct device *dev,
 	}
 	mutex_unlock(&panel->panel_lock);
 
-	addr = (unsigned int **)kallsyms_lookup_name("main_display");
+	addr = (unsigned int **)kallsyms_lookup_name("primary_display");
 	if (addr) {
 		display = (struct dsi_display *)*addr;
 	} else {
-		pr_err("main_display not founded.\n");
+		pr_err("primary_display not founded.\n");
 		return -EINVAL;
 	}
 
@@ -701,6 +701,7 @@ static ssize_t brightness_dim_get(struct device *dev,
 {
 	struct dsi_panel *panel;
 	int len = 0;
+	int bc_dim_f_cnt = 0;
 
 	panel = dev_get_drvdata(dev);
 	if (!panel) {
@@ -713,7 +714,7 @@ static ssize_t brightness_dim_get(struct device *dev,
 	}
 
 	if (panel->lge.ddic_ops && panel->lge.ddic_ops->lge_get_brightness_dim)
-		panel->lge.ddic_ops->lge_get_brightness_dim(panel);
+		bc_dim_f_cnt = panel->lge.ddic_ops->lge_get_brightness_dim(panel);
 
 	return sprintf(buf, "%d\n", panel->lge.bc_dim_f_cnt);
 }
